@@ -70,9 +70,9 @@ cdef class _ArgInfo:
 
     cdef bint is_scalar(self) noexcept
 
-    cdef str get_c_type(self, type_headers=*)
+    cdef str get_c_type(self, type_decls=*)
 
-    cdef str get_param_c_type(self, ParameterInfo p, type_headers=*)
+    cdef str get_param_c_type(self, ParameterInfo p, type_decls=*)
 
     cdef str get_c_var_name(self, ParameterInfo p)
 
@@ -84,7 +84,7 @@ cdef class _TypeMap:
     cdef public:
         tuple _pairs
 
-    cdef str get_typedef_code(self, type_headers=*)
+    cdef str get_typedef_code(self, type_decls=*)
 
 
 cdef class _Op:
@@ -155,7 +155,7 @@ cpdef str _full_mask_hex()
 
 cdef tuple _get_arginfos(list args)
 
-cdef str _get_kernel_params(tuple params, tuple arginfos, type_headers=*)
+cdef str _get_kernel_params(tuple params, tuple arginfos, type_decls=*)
 
 cdef list _broadcast(list args, tuple params, bint use_size, shape_t& shape)
 
