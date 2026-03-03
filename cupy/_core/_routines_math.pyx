@@ -7,7 +7,7 @@ import cupy
 from cupy._core._reduction import create_reduction_func
 from cupy._core._kernel import create_ufunc, _get_warpsize
 from cupy._core._kernel cimport _full_mask_hex
-from cupy._core._scalar import get_typename
+from cupy._core._scalar import get_typename, format_type_decls
 from cupy._core._ufuncs import elementwise_copy
 import cupy._core.core as core
 from cupy._core cimport internal
@@ -609,7 +609,7 @@ def _inclusive_batch_scan_kernel(
     """).substitute(name=name, dtype=dtype, block_size=block_size,
                     op=op_char[op], identity=identity[op],
                     src_c_cont=src_c_cont, out_c_cont=out_c_cont,
-                    type_decls=_scalar.format_type_decls(type_decls))
+                    type_decls=format_type_decls(type_decls))
     module = compile_with_cache(source)
     return module.get_function(name)
 
@@ -649,7 +649,7 @@ def _add_scan_batch_blocked_sum_kernel(dtype, op, block_size, c_cont):
     }
     """).substitute(name=name, dtype=dtype, op=ops[op], block_size=block_size,
                     c_cont=c_cont,
-                    type_decls=_scalar.format_type_decls(type_decls))
+                    type_decls=format_type_decls(type_decls))
     module = compile_with_cache(source)
     return module.get_function(name)
 
