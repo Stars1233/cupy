@@ -998,6 +998,11 @@ def csr2coo(x, data, indices):
     """
     if not check_availability('csr2coo'):
         raise RuntimeError('csr2coo is not available.')
+    if x.indptr.dtype == _cupy.int64:
+        raise ValueError(
+            'csr2coo (xcsr2coo) does not support int64 indptr '
+            '(cuSPARSE xcsr2coo is int32-only). '
+            'This will be fixed in a future phase.')
 
     handle = _device.get_cusparse_handle()
     m = x.shape[0]
@@ -1556,6 +1561,12 @@ def csrsm2(a, b, alpha=1.0, lower=True, unit_diag=False, transa=False,
         raise ValueError('invalid shape')
     if a.dtype != b.dtype:
         raise TypeError('dtype mismatch')
+    if a.indices.dtype == _cupy.int64:
+        raise ValueError(
+            'csrsm2 does not support int64 indices '
+            '(cuSPARSE csrsm2 is int32-only). '
+            'Cast indices to int32 if they fit: '
+            'a.indices.astype(cupy.int32)')
 
     if lower is True:
         fill_mode = _cusparse.CUSPARSE_FILL_MODE_LOWER
@@ -1679,6 +1690,12 @@ def csrilu02(a, level_info=False):
         raise TypeError('a must be CSR sparse matrix')
     if a.shape[0] != a.shape[1]:
         raise ValueError('invalid shape (a.shape: {})'.format(a.shape))
+    if a.indices.dtype == _cupy.int64:
+        raise ValueError(
+            'csrilu02 does not support int64 indices '
+            '(cuSPARSE csrilu02 is int32-only). '
+            'Cast indices to int32 if they fit: '
+            'a.indices.astype(cupy.int32)')
 
     if level_info is False:
         policy = _cusparse.CUSPARSE_SOLVE_POLICY_NO_LEVEL

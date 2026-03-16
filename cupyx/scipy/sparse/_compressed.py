@@ -204,6 +204,8 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
             data = x.data
             indices = x.indices
             indptr = x.indptr
+            # Preserve index dtype from source matrix.
+            idx_dtype = indices.dtype
 
             if arg1.format != self.format:
                 # When formats are different, all arrays are already copied
@@ -215,26 +217,29 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
         elif _util.isshape(arg1):
             m, n = arg1
             m, n = int(m), int(n)
+            idx_dtype = _sputils.get_index_dtype(maxval=max(m, n))
             data = basic.zeros(0, dtype if dtype else 'd')
-            indices = basic.zeros(0, 'i')
-            indptr = basic.zeros(self._swap(m, n)[0] + 1, dtype='i')
+            indices = basic.zeros(0, idx_dtype)
+            indptr = basic.zeros(self._swap(m, n)[0] + 1, dtype=idx_dtype)
             # shape and copy argument is ignored
             shape = (m, n)
             copy = False
 
         elif scipy_available and scipy.sparse.issparse(arg1):
-            # Convert scipy.sparse to cupyx.scipy.sparse
+            # Convert scipy.sparse to cupyx.scipy.sparse.
+            # Preserve scipy's index dtype (scipy uses get_index_dtype internally).
             x = arg1.asformat(self.format)
             data = cupy.array(x.data)
-            indices = cupy.array(x.indices, dtype='i')
-            indptr = cupy.array(x.indptr, dtype='i')
+            idx_dtype = x.indices.dtype
+            indices = cupy.array(x.indices, dtype=idx_dtype)
+            indptr = cupy.array(x.indptr, dtype=idx_dtype)
             copy = False
 
             if shape is None:
                 shape = arg1.shape
 
         elif isinstance(arg1, tuple) and len(arg1) == 2:
-            # Note: This implementation is not efficeint, as it first
+            # Note: This implementation is not efficient, as it first
             # constructs a sparse matrix with coo format, then converts it to
             # compressed format.
             sp_coo = _coo.coo_matrix(arg1, shape=shape, dtype=dtype, copy=copy)
@@ -242,6 +247,7 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
             data = sp_compressed.data
             indices = sp_compressed.indices
             indptr = sp_compressed.indptr
+            idx_dtype = indices.dtype  # derived from COO's get_index_dtype call
 
         elif isinstance(arg1, tuple) and len(arg1) == 3:
             data, indices, indptr = arg1
@@ -254,6 +260,13 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
             if len(data) != len(indices):
                 raise ValueError('indices and data should have the same size')
 
+            # Mirror scipy: choose int32 when values fit, int64 when they don't.
+            # maxval may be None if shape is not yet known; contents check
+            # handles that case.
+            maxval = max(shape) if shape is not None else None
+            idx_dtype = _sputils.get_index_dtype(
+                (indices, indptr), maxval=maxval, check_contents=True)
+
         elif _base.isdense(arg1):
             if arg1.ndim > 2:
                 raise ValueError('expected dimension <= 2 array or matrix')
@@ -262,6 +275,7 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
             elif arg1.ndim == 0:
                 arg1 = arg1[None, None]
             data, indices, indptr = self._convert_dense(arg1)
+            idx_dtype = indices.dtype  # respect what _convert_dense chose
             copy = False
             if shape is None:
                 shape = arg1.shape
@@ -283,8 +297,8 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
         data = data.astype(dtype, copy=copy)
         sparse_data._data_matrix.__init__(self, data)
 
-        self.indices = indices.astype('i', copy=copy)
-        self.indptr = indptr.astype('i', copy=copy)
+        self.indices = indices.astype(idx_dtype, copy=copy)
+        self.indptr = indptr.astype(idx_dtype, copy=copy)
 
         if shape is None:
             shape = self._swap(len(indptr) - 1, int(indices.max()) + 1)

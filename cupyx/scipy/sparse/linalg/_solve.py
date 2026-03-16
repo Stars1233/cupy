@@ -519,6 +519,14 @@ def spsolve(A, b):
         warnings.warn('CSR format is required. Converting to CSR format.',
                       sparse.SparseEfficiencyWarning)
         A = A.tocsr()
+
+    if A.indices.dtype == cupy.int64:
+        raise ValueError(
+            'spsolve does not support int64 indices '
+            '(cusolverSp csrlsvqr is int32-only). '
+            'Cast indices to int32 if they fit: '
+            'A.indices.astype(cupy.int32)')
+
     A.sum_duplicates()
     b = b.astype(A.dtype, copy=False)
 

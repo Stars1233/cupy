@@ -32,8 +32,9 @@ def eye(m, n=None, k=0, dtype='d', format=None):
 
     if m == n and k == 0:
         if format in ['csr', 'csc']:
-            indptr = cupy.arange(n + 1, dtype='i')
-            indices = cupy.arange(n, dtype='i')
+            idx_dtype = _sputils.get_index_dtype(maxval=max(m, n))
+            indptr = cupy.arange(n + 1, dtype=idx_dtype)
+            indices = cupy.arange(n, dtype=idx_dtype)
             data = cupy.ones(n, dtype=dtype)
             if format == 'csr':
                 cls = _csr.csr_matrix
@@ -42,8 +43,9 @@ def eye(m, n=None, k=0, dtype='d', format=None):
             return cls((data, indices, indptr), (n, n))
 
         elif format == 'coo':
-            row = cupy.arange(n, dtype='i')
-            col = cupy.arange(n, dtype='i')
+            idx_dtype = _sputils.get_index_dtype(maxval=max(m, n))
+            row = cupy.arange(n, dtype=idx_dtype)
+            col = cupy.arange(n, dtype=idx_dtype)
             data = cupy.ones(n, dtype=dtype)
             return _coo.coo_matrix((data, (row, col)), (n, n))
 

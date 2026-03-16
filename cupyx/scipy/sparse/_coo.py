@@ -85,8 +85,9 @@ class coo_matrix(sparse_data._data_matrix):
             m, n = arg1
             m, n = int(m), int(n)
             data = cupy.zeros(0, dtype if dtype else 'd')
-            row = cupy.zeros(0, dtype='i')
-            col = cupy.zeros(0, dtype='i')
+            idx_dtype = _sputils.get_index_dtype(maxval=max(m, n))
+            row = cupy.zeros(0, dtype=idx_dtype)
+            col = cupy.zeros(0, dtype=idx_dtype)
             # shape and copy argument is ignored
             shape = (m, n)
             copy = False
@@ -94,11 +95,12 @@ class coo_matrix(sparse_data._data_matrix):
             self.has_canonical_format = True
 
         elif _scipy_available and scipy.sparse.issparse(arg1):
-            # Convert scipy.sparse to cupyx.scipy.sparse
+            # Convert scipy.sparse to cupyx.scipy.sparse.
+            # Preserve scipy's index dtype (scipy uses get_index_dtype internally).
             x = arg1.tocoo()
             data = cupy.array(x.data)
-            row = cupy.array(x.row, dtype='i')
-            col = cupy.array(x.col, dtype='i')
+            row = cupy.array(x.row, dtype=x.row.dtype)
+            col = cupy.array(x.col, dtype=x.col.dtype)
             copy = False
             if shape is None:
                 shape = arg1.shape
@@ -146,8 +148,17 @@ class coo_matrix(sparse_data._data_matrix):
                 ' are supported')
 
         data = data.astype(dtype, copy=copy)
-        row = row.astype('i', copy=copy)
-        col = col.astype('i', copy=copy)
+        # Choose index dtype: int32 when values fit, int64 when they don't.
+        # Mirror scipy's get_index_dtype(check_contents=True) logic so we
+        # downcast int64 arrays whose values all fit in int32 (common case).
+        if shape is not None:
+            maxval = max(shape)
+        else:
+            maxval = None
+        idx_dtype = _sputils.get_index_dtype(
+            (row, col), maxval=maxval, check_contents=True)
+        row = row.astype(idx_dtype, copy=copy)
+        col = col.astype(idx_dtype, copy=copy)
 
         if shape is None:
             if len(row) == 0 or len(col) == 0:
