@@ -836,15 +836,26 @@ def csrsort(x):
         x (cupyx.scipy.sparse.csr_matrix): A sparse matrix to sort.
 
     """
-    if not check_availability('csrsort'):
-        raise RuntimeError('csrsort is not available.')
-
     nnz = x.nnz
     if nnz == 0:
         return
-    handle = _device.get_cusparse_handle()
     m, n = x.shape
 
+    if x.indices.dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: xcsrsort is int32-only.
+        # Expand indptr → row array via searchsorted
+        # (cupy.repeat(arange, diff(indptr)) fails for CuPy ndarray repeats).
+        nnz_range = _cupy.arange(nnz, dtype=_cupy.int64)
+        row = _cupy.searchsorted(x.indptr[1:], nnz_range, side='right').astype(_cupy.int64)
+        order = _cupy.lexsort(_cupy.stack([x.indices, row]))
+        x.indices[:] = x.indices[order]
+        x.data[:] = x.data[order]
+        x.has_sorted_indices = True
+        return
+
+    if not check_availability('csrsort'):
+        raise RuntimeError('csrsort is not available.')
+    handle = _device.get_cusparse_handle()
     buffer_size = _cusparse.xcsrsort_bufferSizeExt(
         handle, m, n, nnz, x.indptr.data.ptr,
         x.indices.data.ptr)
@@ -874,15 +885,26 @@ def cscsort(x):
         x (cupyx.scipy.sparse.csc_matrix): A sparse matrix to sort.
 
     """
-    if not check_availability('cscsort'):
-        raise RuntimeError('cscsort is not available.')
-
     nnz = x.nnz
     if nnz == 0:
         return
-    handle = _device.get_cusparse_handle()
     m, n = x.shape
 
+    if x.indices.dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: xcscsort is int32-only.
+        # Expand indptr → col array via searchsorted
+        # (cupy.repeat(arange, diff(indptr)) fails for CuPy ndarray repeats).
+        nnz_range = _cupy.arange(nnz, dtype=_cupy.int64)
+        col = _cupy.searchsorted(x.indptr[1:], nnz_range, side='right').astype(_cupy.int64)
+        order = _cupy.lexsort(_cupy.stack([x.indices, col]))
+        x.indices[:] = x.indices[order]
+        x.data[:] = x.data[order]
+        x.has_sorted_indices = True
+        return
+
+    if not check_availability('cscsort'):
+        raise RuntimeError('cscsort is not available.')
+    handle = _device.get_cusparse_handle()
     buffer_size = _cusparse.xcscsort_bufferSizeExt(
         handle, m, n, nnz, x.indptr.data.ptr,
         x.indices.data.ptr)
@@ -913,15 +935,32 @@ def coosort(x, sort_by='r'):
         sort_by (str): Sort the indices by row ('r', default) or column ('c').
 
     """
-    if not check_availability('coosort'):
-        raise RuntimeError('coosort is not available.')
-
     nnz = x.nnz
     if nnz == 0:
         return
-    handle = _device.get_cusparse_handle()
     m, n = x.shape
 
+    if x.row.dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: xcoosort is int32-only.
+        # Use lexsort: last key is primary sort key.
+        if sort_by == 'r':
+            # Sort by (row, col): primary=row, secondary=col
+            order = _cupy.lexsort(_cupy.stack([x.col, x.row]))
+        elif sort_by == 'c':
+            # Sort by (col, row): primary=col, secondary=row
+            order = _cupy.lexsort(_cupy.stack([x.row, x.col]))
+        else:
+            raise ValueError("sort_by must be either 'r' or 'c'")
+        x.row[:] = x.row[order]
+        x.col[:] = x.col[order]
+        x.data[:] = x.data[order]
+        if sort_by == 'c':
+            x._has_canonical_format = False
+        return
+
+    if not check_availability('coosort'):
+        raise RuntimeError('coosort is not available.')
+    handle = _device.get_cusparse_handle()
     buffer_size = _cusparse.xcoosort_bufferSizeExt(
         handle, m, n, nnz, x.row.data.ptr, x.col.data.ptr)
     buf = _cupy.empty(buffer_size, 'b')
@@ -955,13 +994,23 @@ def coosort(x, sort_by='r'):
 
 
 def coo2csr(x):
-    handle = _device.get_cusparse_handle()
-    m = x.shape[0]
+    m = int(x.shape[0])
     nnz = x.nnz
+    idx_dtype = x.row.dtype
     if nnz == 0:
-        indptr = _cupy.zeros(m + 1, 'i')
+        indptr = _cupy.zeros(m + 1, dtype=idx_dtype)
+    elif idx_dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: xcoo2csr is int32-only.
+        # Use unique+scatter to avoid two simultaneous large allocations.
+        # (bincount would require a m-element output PLUS a separate indptr array.)
+        # cupy.add.at is int32-only and cannot be used here.
+        unique_rows, row_counts = _cupy.unique(x.row, return_counts=True)
+        indptr = _cupy.zeros(m + 1, dtype=idx_dtype)
+        indptr[unique_rows + 1] = row_counts.astype(idx_dtype)
+        _cupy.cumsum(indptr, out=indptr)
     else:
-        indptr = _cupy.empty(m + 1, 'i')
+        handle = _device.get_cusparse_handle()
+        indptr = _cupy.empty(m + 1, dtype=idx_dtype)
         _cusparse.xcoo2csr(
             handle, x.row.data.ptr, nnz, m,
             indptr.data.ptr, _cusparse.CUSPARSE_INDEX_BASE_ZERO)
@@ -970,13 +1019,22 @@ def coo2csr(x):
 
 
 def coo2csc(x):
-    handle = _device.get_cusparse_handle()
-    n = x.shape[1]
+    n = int(x.shape[1])
     nnz = x.nnz
+    idx_dtype = x.col.dtype
     if nnz == 0:
-        indptr = _cupy.zeros(n + 1, 'i')
+        indptr = _cupy.zeros(n + 1, dtype=idx_dtype)
+    elif idx_dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: xcoo2csr (used for cols) is int32-only.
+        # Use unique+scatter to avoid two simultaneous large allocations.
+        # cupy.add.at is int32-only and cannot be used here.
+        unique_cols, col_counts = _cupy.unique(x.col, return_counts=True)
+        indptr = _cupy.zeros(n + 1, dtype=idx_dtype)
+        indptr[unique_cols + 1] = col_counts.astype(idx_dtype)
+        _cupy.cumsum(indptr, out=indptr)
     else:
-        indptr = _cupy.empty(n + 1, 'i')
+        handle = _device.get_cusparse_handle()
+        indptr = _cupy.empty(n + 1, dtype=idx_dtype)
         _cusparse.xcoo2csr(
             handle, x.col.data.ptr, nnz, n,
             indptr.data.ptr, _cusparse.CUSPARSE_INDEX_BASE_ZERO)
@@ -996,29 +1054,83 @@ def csr2coo(x, data, indices):
         cupyx.scipy.sparse.coo_matrix: A converted matrix.
 
     """
-    if not check_availability('csr2coo'):
-        raise RuntimeError('csr2coo is not available.')
-    if x.indptr.dtype == _cupy.int64:
-        raise ValueError(
-            'csr2coo (xcsr2coo) does not support int64 indptr '
-            '(cuSPARSE xcsr2coo is int32-only). '
-            'This will be fixed in a future phase.')
-
-    handle = _device.get_cusparse_handle()
-    m = x.shape[0]
+    m = int(x.shape[0])
     nnz = x.nnz
-    row = _cupy.empty(nnz, 'i')
-    _cusparse.xcsr2coo(
-        handle, x.indptr.data.ptr, nnz, m, row.data.ptr,
-        _cusparse.CUSPARSE_INDEX_BASE_ZERO)
+    idx_dtype = x.indptr.dtype
+
+    if idx_dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: xcsr2coo reads indptr as int32 (silent corruption).
+        # Use searchsorted to expand indptr → row array.
+        # cupy.repeat(arange, diff(indptr)) fails for CuPy ndarray repeats.
+        # No cuSPARSE needed, so availability guard is skipped for int64.
+        nnz_range = _cupy.arange(nnz, dtype=_cupy.int64)
+        row = _cupy.searchsorted(x.indptr[1:], nnz_range, side='right').astype(_cupy.int64)
+    else:
+        if not check_availability('csr2coo'):
+            raise RuntimeError('csr2coo is not available.')
+        handle = _device.get_cusparse_handle()
+        row = _cupy.empty(nnz, idx_dtype)
+        _cusparse.xcsr2coo(
+            handle, x.indptr.data.ptr, nnz, m, row.data.ptr,
+            _cusparse.CUSPARSE_INDEX_BASE_ZERO)
     # data and indices did not need to be copied already
     return cupyx.scipy.sparse.coo_matrix(
         (data, (row, indices)), shape=x.shape)
 
 
+def _cupy_csr2csc_int64(x):
+    """Pure-CuPy CSR→CSC for int64 indices.
+
+    TEMPORARY WORKAROUND: cusparseCsr2cscEx2 uses const int* (int32-only at the
+    CUDA API level).  No Generic API replacement exists as of CUDA 12.x.
+
+    Memory design: uses cupy.unique (nnz-sized output) + scatter-assign rather
+    than bincount (which would require TWO large indptr-sized allocations
+    simultaneously).  Only one large (n+1)-element allocation is needed.
+
+    Performance: O(nnz log nnz) due to lexsort — still GPU-accelerated.
+    Long-term: request a Generic API CSR↔CSC function from the cuSPARSE team.
+    """
+    m, n = int(x.shape[0]), int(x.shape[1])
+    nnz = x.nnz
+    idx_dtype = x.indices.dtype  # int64
+
+    if nnz == 0:
+        return cupyx.scipy.sparse.csc_matrix(
+            (_cupy.empty(0, x.dtype), _cupy.empty(0, idx_dtype),
+             _cupy.zeros(n + 1, idx_dtype)), shape=x.shape)
+
+    # Build CSC indptr using unique+scatter to avoid two simultaneous large allocations.
+    # (bincount would require both a col_counts array and csc_indptr in memory at once.)
+    # cupy.add.at is int32-only so bincount+cumsum is used for small n; here we need
+    # one allocation only.
+    unique_cols, col_counts = _cupy.unique(x.indices, return_counts=True)
+    csc_indptr = _cupy.zeros(n + 1, dtype=idx_dtype)
+    csc_indptr[unique_cols + 1] = col_counts.astype(idx_dtype)
+    _cupy.cumsum(csc_indptr, out=csc_indptr)
+
+    # Build row array from CSR indptr using searchsorted.
+    # cupy.repeat(arange, diff(indptr)) fails when diff(indptr) is a CuPy ndarray.
+    nnz_range = _cupy.arange(nnz, dtype=idx_dtype)
+    row = _cupy.searchsorted(x.indptr[1:], nnz_range, side='right').astype(idx_dtype)
+
+    # Sort by (col, row) to get CSC column order.
+    order = _cupy.lexsort(_cupy.stack([row, x.indices]))
+
+    csc_indices = row[order]
+    csc_data = x.data[order]
+
+    return cupyx.scipy.sparse.csc_matrix(
+        (csc_data, csc_indices, csc_indptr), shape=x.shape)
+
+
 def csr2csc(x):
     if not check_availability('csr2csc'):
         raise RuntimeError('csr2csc is not available.')
+
+    if x.indices.dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: csr2csc uses const int* (int32-only).
+        return _cupy_csr2csc_int64(x)
 
     handle = _device.get_cusparse_handle()
     m, n = x.shape
@@ -1043,6 +1155,10 @@ def csr2csc(x):
 def csr2cscEx2(x):
     if not check_availability('csr2cscEx2'):
         raise RuntimeError('csr2cscEx2 is not available.')
+
+    if x.indices.dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: csr2cscEx2 uses const int* (int32-only).
+        return _cupy_csr2csc_int64(x)
 
     handle = _device.get_cusparse_handle()
     m, n = x.shape
@@ -1082,21 +1198,76 @@ def csc2coo(x, data, indices):
         cupyx.scipy.sparse.coo_matrix: A converted matrix.
 
     """
-    handle = _device.get_cusparse_handle()
-    n = x.shape[1]
+    n = int(x.shape[1])
     nnz = x.nnz
-    col = _cupy.empty(nnz, 'i')
-    _cusparse.xcsr2coo(
-        handle, x.indptr.data.ptr, nnz, n, col.data.ptr,
-        _cusparse.CUSPARSE_INDEX_BASE_ZERO)
+    idx_dtype = x.indptr.dtype
+
+    if idx_dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: xcsr2coo reads indptr as int32 (silent corruption).
+        # Use searchsorted to expand indptr → col array.
+        # cupy.repeat(arange, diff(indptr)) fails for CuPy ndarray repeats.
+        nnz_range = _cupy.arange(nnz, dtype=_cupy.int64)
+        col = _cupy.searchsorted(x.indptr[1:], nnz_range, side='right').astype(_cupy.int64)
+    else:
+        handle = _device.get_cusparse_handle()
+        col = _cupy.empty(nnz, idx_dtype)
+        _cusparse.xcsr2coo(
+            handle, x.indptr.data.ptr, nnz, n, col.data.ptr,
+            _cusparse.CUSPARSE_INDEX_BASE_ZERO)
     # data and indices did not need to be copied already
     return cupyx.scipy.sparse.coo_matrix(
         (data, (indices, col)), shape=x.shape)
 
 
+def _cupy_csc2csr_int64(x):
+    """Pure-CuPy CSC→CSR for int64 indices.
+
+    TEMPORARY WORKAROUND: cusparseCsr2cscEx2 (used for CSC→CSR transposition)
+    uses const int* (int32-only at the CUDA API level).
+
+    CSC has indptr=col_ptrs (n+1 elems), indices=row_indices.
+    CSR has indptr=row_ptrs (m+1 elems), indices=col_indices.
+    This is the same problem as CSR→CSC with rows and columns swapped.
+
+    Memory design: uses cupy.unique + scatter-assign (same as _cupy_csr2csc_int64)
+    to avoid two simultaneous large allocations.
+    """
+    m, n = int(x.shape[0]), int(x.shape[1])
+    nnz = x.nnz
+    idx_dtype = x.indices.dtype  # int64
+
+    if nnz == 0:
+        return cupyx.scipy.sparse.csr_matrix(
+            (_cupy.empty(0, x.dtype), _cupy.empty(0, idx_dtype),
+             _cupy.zeros(m + 1, idx_dtype)), shape=x.shape)
+
+    # Build CSR indptr using unique+scatter to avoid two simultaneous large allocations.
+    unique_rows, row_counts = _cupy.unique(x.indices, return_counts=True)
+    csr_indptr = _cupy.zeros(m + 1, dtype=idx_dtype)
+    csr_indptr[unique_rows + 1] = row_counts.astype(idx_dtype)
+    _cupy.cumsum(csr_indptr, out=csr_indptr)
+
+    # Build col array from CSC indptr using searchsorted.
+    nnz_range = _cupy.arange(nnz, dtype=idx_dtype)
+    col = _cupy.searchsorted(x.indptr[1:], nnz_range, side='right').astype(idx_dtype)
+
+    # Sort by (row, col) to get CSR row order.
+    order = _cupy.lexsort(_cupy.stack([col, x.indices]))
+
+    csr_indices = col[order]
+    csr_data = x.data[order]
+
+    return cupyx.scipy.sparse.csr_matrix(
+        (csr_data, csr_indices, csr_indptr), shape=x.shape)
+
+
 def csc2csr(x):
     if not check_availability('csc2csr'):
         raise RuntimeError('csr2csc is not available.')
+
+    if x.indices.dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: csc2csr uses const int* (int32-only).
+        return _cupy_csc2csr_int64(x)
 
     handle = _device.get_cusparse_handle()
     m, n = x.shape
@@ -1121,6 +1292,10 @@ def csc2csr(x):
 def csc2csrEx2(x):
     if not check_availability('csc2csrEx2'):
         raise RuntimeError('csc2csrEx2 is not available.')
+
+    if x.indices.dtype == _cupy.int64:
+        # TEMPORARY WORKAROUND: csc2csrEx2 uses const int* (int32-only).
+        return _cupy_csc2csr_int64(x)
 
     handle = _device.get_cusparse_handle()
     m, n = x.shape

@@ -422,15 +422,19 @@ class coo_matrix(sparse_data._data_matrix):
             col = src_col
         else:
             # TODO(leofang): move the kernels outside this method
-            index = cupy.cumsum(diff, dtype='i')
+            # Use the actual index dtype (int64 when indices are large).
+            # ElementwiseKernel silently casts to the declared type — using
+            # 'int32' here would silently truncate int64 index values > INT32_MAX.
+            idx_dtype = self.row.dtype
+            index = cupy.cumsum(diff, dtype=idx_dtype)
             size = int(index[-1]) + 1
             data = cupy.zeros(size, dtype=self.data.dtype)
-            row = cupy.empty(size, dtype='i')
-            col = cupy.empty(size, dtype='i')
+            row = cupy.empty(size, dtype=idx_dtype)
+            col = cupy.empty(size, dtype=idx_dtype)
             if self.data.dtype.kind == 'b':
                 cupy.ElementwiseKernel(
-                    'T src_data, int32 src_row, int32 src_col, int32 index',
-                    'raw T data, raw int32 row, raw int32 col',
+                    'T src_data, I src_row, I src_col, I index',
+                    'raw T data, raw I row, raw I col',
                     '''
                     if (src_data) data[index] = true;
                     row[index] = src_row;
@@ -440,8 +444,8 @@ class coo_matrix(sparse_data._data_matrix):
                 )(src_data, src_row, src_col, index, data, row, col)
             elif self.data.dtype.kind == 'f':
                 cupy.ElementwiseKernel(
-                    'T src_data, int32 src_row, int32 src_col, int32 index',
-                    'raw T data, raw int32 row, raw int32 col',
+                    'T src_data, I src_row, I src_col, I index',
+                    'raw T data, raw I row, raw I col',
                     '''
                     atomicAdd(&data[index], src_data);
                     row[index] = src_row;
@@ -451,9 +455,9 @@ class coo_matrix(sparse_data._data_matrix):
                 )(src_data, src_row, src_col, index, data, row, col)
             elif self.data.dtype.kind == 'c':
                 cupy.ElementwiseKernel(
-                    'T src_real, T src_imag, int32 src_row, int32 src_col, '
-                    'int32 index',
-                    'raw T real, raw T imag, raw int32 row, raw int32 col',
+                    'T src_real, T src_imag, I src_row, I src_col, '
+                    'I index',
+                    'raw T real, raw T imag, raw I row, raw I col',
                     '''
                     atomicAdd(&real[index], src_real);
                     atomicAdd(&imag[index], src_imag);
