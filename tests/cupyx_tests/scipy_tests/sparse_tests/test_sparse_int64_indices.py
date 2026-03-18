@@ -827,15 +827,153 @@ class TestInt64Diagonal:
         testing.assert_array_almost_equal(d, cupy.ones(4))
 
 
+class TestInt64MinMaxReduction:
+    """max/min axis-reductions with int64 index dtype.
+
+    _max_min_reduction_code previously used int* for indptr slices and a plain
+    int32 'length' parameter (= shape[axis]).  For int64 matrices with ncols >
+    INT32_MAX, passing shape[1] to int32 raised OverflowError at kernel launch.
+    The fix: RawModule + name_expressions templated on TI, dispatched by
+    get_typename(self.indptr.dtype); shape param passed as idx_dtype.type(N).
+
+    Design note: axis=1 (reduce over columns) on a CSR matrix sends
+    length = shape[1] directly to the kernel — the critical int64 path.
+    axis=0 converts to CSC first, then sends length = shape[0].
+    Both paths exercise the same TI template, just with different shapes.
+    """
+
+    def _make_int64_csr(self):
+        # 2 × (_LARGE+1) CSR — shape forces int64 index dtype.
+        # Row 0: col 0 → 1.0, col 2 → 3.0
+        # Row 1: col 1 → 2.0, col 2 → -1.0
+        data = cupy.array([1.0, 3.0, 2.0, -1.0])
+        indices = cupy.array([0, 2, 1, 2], dtype=cupy.int64)
+        indptr = cupy.array([0, 2, 4], dtype=cupy.int64)
+        return sparse.csr_matrix(
+            (data, indices, indptr), shape=(2, _LARGE + 1))
+
+    def test_max_axis1_int64(self):
+        # Previously raised OverflowError: shape[1] = _LARGE+1 overflowed int32
+        # in the kernel launch argument.  Now uses idx_dtype.type(N) = int64.
+        m = self._make_int64_csr()
+        assert m.indices.dtype == cupy.int64
+        result = m.max(axis=1).toarray()
+        # Row 0: max(1.0, 3.0, implicit zeros) = 3.0
+        # Row 1: max(2.0, -1.0, implicit zeros) = 2.0
+        assert float(result[0, 0]) == pytest.approx(3.0)
+        assert float(result[1, 0]) == pytest.approx(2.0)
+
+    def test_min_axis1_int64(self):
+        m = self._make_int64_csr()
+        assert m.indices.dtype == cupy.int64
+        result = m.min(axis=1).toarray()
+        # Row 0: min(1.0, 3.0, implicit zeros) = 0.0 (implicit zeros dominate)
+        # Row 1: min(2.0, -1.0, implicit zeros) = -1.0
+        assert float(result[0, 0]) == pytest.approx(0.0)
+        assert float(result[1, 0]) == pytest.approx(-1.0)
+
+    def test_max_axis0_int64(self):
+        # axis=0 on CSC: _minor_reduce receives length = shape[0] = _LARGE+1.
+        # Construct (_LARGE+1, 2) CSC directly — indptr has 3 elements (tiny).
+        # Col 0: rows 0,1 → 1.0, -2.0   Col 1: row 0 → 3.0
+        data = cupy.array([1.0, -2.0, 3.0])
+        indices = cupy.array([0, 1, 0], dtype=cupy.int64)
+        indptr = cupy.array([0, 2, 3], dtype=cupy.int64)
+        m = sparse.csc_matrix((data, indices, indptr), shape=(_LARGE + 1, 2))
+        assert m.indices.dtype == cupy.int64
+        result = m.max(axis=0).toarray()
+        # Col 0: max(1.0, -2.0, implicit zeros) = 1.0
+        # Col 1: max(3.0, implicit zeros) = 3.0
+        assert float(result[0, 0]) == pytest.approx(1.0)
+        assert float(result[0, 1]) == pytest.approx(3.0)
+
+    def test_max_axis1_int32_regression(self):
+        # int32 path must still work after the RawKernel → RawModule change.
+        data = cupy.array([1.0, 3.0, 2.0, -1.0])
+        indices = cupy.array([0, 2, 1, 2], dtype=cupy.int32)
+        indptr = cupy.array([0, 2, 4], dtype=cupy.int32)
+        m = sparse.csr_matrix((data, indices, indptr), shape=(2, 5))
+        result = m.max(axis=1).toarray()
+        assert float(result[0, 0]) == pytest.approx(3.0)
+        assert float(result[1, 0]) == pytest.approx(2.0)
+
+
+class TestInt64Toarray:
+    """toarray() for int64 matrices.
+
+    _cupy_csr2dense previously had int32 M, N shape parameters; for matrices
+    where shape[1] > INT32_MAX, these caused OverflowError at the Python layer
+    before the kernel was launched (numpy.int32(N) overflows for N > INT32_MAX).
+    Now they use I (idx_dtype.type(N)), matching the index dtype.
+
+    Practical constraint: a (1, _LARGE+1) dense output requires ~17 GB, so
+    these tests use a try/except OOM guard and skip on 16 GB hardware.
+    The int32 regression test always runs.
+    """
+
+    @testing.slow
+    def test_toarray_int64_no_overflow_error(self):
+        # Before fix: OverflowError at numpy.int32(_LARGE+1) in kernel args.
+        # After fix: either succeeds (≥17 GB GPU) or OOMs gracefully.
+        data = cupy.array([1.0])
+        indices = cupy.array([0], dtype=cupy.int64)
+        indptr = cupy.array([0, 1], dtype=cupy.int64)
+        m = sparse.csr_matrix((data, indices, indptr), shape=(1, _LARGE + 1))
+        try:
+            arr = m.toarray()
+            assert arr.shape == (1, _LARGE + 1)
+            assert float(arr[0, 0]) == pytest.approx(1.0)
+        except cupy.cuda.memory.OutOfMemoryError:
+            pytest.skip('not enough GPU memory for dense output')
+
+    @testing.slow
+    def test_toarray_order_f_no_overflow_error(self):
+        # order='F' calls _cupy_csr2dense with row_major=False.
+        data = cupy.array([1.0])
+        indices = cupy.array([0], dtype=cupy.int64)
+        indptr = cupy.array([0, 1], dtype=cupy.int64)
+        m = sparse.csr_matrix((data, indices, indptr), shape=(1, _LARGE + 1))
+        try:
+            arr = m.toarray(order='F')
+            assert arr.shape == (1, _LARGE + 1)
+            assert float(arr[0, 0]) == pytest.approx(1.0)
+        except cupy.cuda.memory.OutOfMemoryError:
+            pytest.skip('not enough GPU memory for dense output')
+
+    def test_toarray_int32_regression(self):
+        # int32 path must continue to work after the M, N parameter change.
+        data = cupy.array([1.0, 2.0])
+        indices = cupy.array([0, 2], dtype=cupy.int32)
+        indptr = cupy.array([0, 1, 2], dtype=cupy.int32)
+        m = sparse.csr_matrix((data, indices, indptr), shape=(2, 3))
+        arr = m.toarray()
+        expected = cupy.array([[1.0, 0.0, 0.0], [0.0, 0.0, 2.0]])
+        testing.assert_array_almost_equal(arr, expected)
+
+
 class TestInt64SpGEMM:
     """int64-related fixes to spgemm.
 
     spgemm previously hardcoded 'i' (int32) for the c_indices allocation.
     We updated this to numpy.result_type(a.indices, b.indices).
 
-    Note: cuSPARSE spgemm does not support int64 inputs on current releases
-    (all int64 tests xfail), so only the int32 regression is verified here.
+    cuSPARSE spgemm does not support int64 inputs on current releases; calling
+    it with int64 previously gave a cryptic CUSPARSE_STATUS_NOT_SUPPORTED.
+    We added an explicit ValueError guard (checked before format/shape checks)
+    so callers get a clear error message.
     """
+
+    def test_spgemm_rejects_int64(self):
+        # The int64 guard fires before the has_canonical_format assert and the
+        # shape-compatibility check, so any int64 CSR matrix suffices here.
+        if not cusparse.check_availability('spgemm'):
+            pytest.skip('spgemm is not available')
+        data = cupy.array([1.0])
+        indices = cupy.array([0], dtype=cupy.int64)
+        indptr = cupy.array([0, 1], dtype=cupy.int64)
+        a = sparse.csr_matrix((data, indices, indptr), shape=(1, _LARGE + 1))
+        with pytest.raises(ValueError, match='int64'):
+            cusparse.spgemm(a, a)
 
     def test_spgemm_int32_result_dtype_preserved(self):
         # result_type(int32, int32) == int32: int64 work must not

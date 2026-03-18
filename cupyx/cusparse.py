@@ -2373,16 +2373,15 @@ def spgemm(a, b, alpha=1):
         raise TypeError('unsupported type (actual: {})'.format(type(a)))
     if not isinstance(b, cupyx.scipy.sparse.csr_matrix):
         raise TypeError('unsupported type (actual: {})'.format(type(b)))
-    assert a.has_canonical_format
-    assert b.has_canonical_format
-    if a.shape[1] != b.shape[0]:
-        raise ValueError('mismatched shape')
-
     if a.indices.dtype == _cupy.int64 or b.indices.dtype == _cupy.int64:
         raise ValueError(
             'spgemm does not support int64 indices '
             '(cuSPARSE spGEMM is int32-only at runtime even via the Generic API). '
             'A pure-CuPy int64 fallback is planned for future work.')
+    assert a.has_canonical_format
+    assert b.has_canonical_format
+    if a.shape[1] != b.shape[0]:
+        raise ValueError('mismatched shape')
 
     m, k = a.shape
     _, n = b.shape
