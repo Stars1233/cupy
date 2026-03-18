@@ -25,13 +25,13 @@ _bool_scalar_types = (bool, numpy.bool_)
 
 
 _compress_getitem_kern = _core.ElementwiseKernel(
-    'T d, S ind, int32 minor', 'raw T answer',
+    'T d, S ind, S minor', 'raw T answer',
     'if (ind == minor) atomicAdd(&answer[0], d);',
     'cupyx_scipy_sparse_compress_getitem')
 
 
 _compress_getitem_complex_kern = _core.ElementwiseKernel(
-    'T real, T imag, S ind, int32 minor',
+    'T real, T imag, S ind, S minor',
     'raw T answer_real, raw T answer_imag',
     '''
     if (ind == minor) {
@@ -96,9 +96,9 @@ def _get_csr_submatrix_minor_axis(Ax, Aj, Ap, start, stop):
 
 
 _csr_row_index_ker = _core.ElementwiseKernel(
-    'int32 out_rows, raw I rows, '
-    'raw int32 Ap, raw int32 Aj, raw T Ax, raw int32 Bp',
-    'int32 Bj, T Bx',
+    'I out_rows, raw I rows, '
+    'raw I Ap, raw I Aj, raw T Ax, raw I Bp',
+    'I Bj, T Bx',
     '''
     const I row = rows[out_rows];
 
@@ -124,6 +124,9 @@ def _csr_row_index(Ax, Aj, Ap, rows):
         Bj (cupy.ndarray): indices array of output sparse matrix
         Bp (cupy.ndarray): indptr array for output sparse matrix
     """
+    # Ensure rows has the same dtype as Ap/Aj so the kernel type parameter I
+    # is consistent across all array arguments.
+    rows = rows.astype(Ap.dtype, copy=False)
     row_nnz = cupy.diff(Ap)
     Bp = cupy.empty(rows.size + 1, dtype=Ap.dtype)
     Bp[0] = 0
@@ -137,6 +140,12 @@ def _csr_row_index(Ax, Aj, Ap, rows):
 
 
 def _csr_indptr_to_coo_rows(nnz, Bp):
+    # Int64 path: xcsr2coo only supports int32; use pure-CuPy searchsorted.
+    if Bp.dtype == cupy.int64:
+        nnz_range = cupy.arange(nnz, dtype=cupy.int64)
+        return cupy.searchsorted(Bp[1:], nnz_range, side='right').astype(
+            cupy.int64)
+
     from cupy_backends.cuda.libs import cusparse
 
     out_rows = cupy.empty(nnz, dtype=numpy.int32)

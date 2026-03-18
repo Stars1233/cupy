@@ -90,17 +90,17 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
     # The distinction in int types (T2) is important for portability in OS.
 
     _argmax_argmin_code = r'''
-        template<typename T1, typename T2> __global__ void
-        ${func}_arg_reduction(T1* data, int* indices, int* x, int* y,
-                              int length, T2* z) {
+        template<typename T1, typename T2, typename TI> __global__ void
+        ${func}_arg_reduction(T1* data, TI* indices, TI* x, TI* y,
+                              TI length, T2* z) {
             // Get the index of the block
             int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
             // Calculate the block length
-            int block_length = y[tid] - x[tid];
+            TI block_length = y[tid] - x[tid];
 
             // Select initial value based on the block density
-            int data_index = 0;
+            TI data_index = 0;
             double data_value = 0;
 
             if (block_length == length){
@@ -124,7 +124,7 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
             }
 
             // Iterate over the section of the sparse matrix
-            for (int entry = x[tid]; entry < y[tid]; entry++){
+            for (TI entry = x[tid]; entry < y[tid]; entry++){
                 if (data[entry] != data[entry]){
                     // Check for NaN
                     data_value = nan("");
@@ -140,24 +140,36 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
             }
 
             // Store in the return function
-            z[tid] = data_index;
+            z[tid] = (T2)data_index;
         }'''
 
     _max_arg_reduction_mod = _core.RawModule(
         code=string.Template(_argmax_argmin_code).substitute(
             func='max', op='>'),
-        name_expressions=['max_arg_reduction<float, int>',
-                          'max_arg_reduction<float, long long>',
-                          'max_arg_reduction<double, int>',
-                          'max_arg_reduction<double, long long>'])
+        name_expressions=[
+            'max_arg_reduction<float, int, int>',
+            'max_arg_reduction<float, long long, int>',
+            'max_arg_reduction<double, int, int>',
+            'max_arg_reduction<double, long long, int>',
+            'max_arg_reduction<float, int, long long>',
+            'max_arg_reduction<float, long long, long long>',
+            'max_arg_reduction<double, int, long long>',
+            'max_arg_reduction<double, long long, long long>',
+        ])
 
     _min_arg_reduction_mod = _core.RawModule(
         code=string.Template(_argmax_argmin_code).substitute(
             func='min', op='<'),
-        name_expressions=['min_arg_reduction<float, int>',
-                          'min_arg_reduction<float, long long>',
-                          'min_arg_reduction<double, int>',
-                          'min_arg_reduction<double, long long>'])
+        name_expressions=[
+            'min_arg_reduction<float, int, int>',
+            'min_arg_reduction<float, long long, int>',
+            'min_arg_reduction<double, int, int>',
+            'min_arg_reduction<double, long long, int>',
+            'min_arg_reduction<float, int, long long>',
+            'min_arg_reduction<float, long long, long long>',
+            'min_arg_reduction<double, int, long long>',
+            'min_arg_reduction<double, long long, long long>',
+        ])
 
     # TODO(leofang): rewrite a more load-balanced approach than this naive one?
     _has_sorted_indices_kern = _core.ElementwiseKernel(
@@ -1068,9 +1080,16 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
         out = cupy.zeros(out_shape, dtype=int)
 
         # Perform the calculation
-        ker_name = '_arg_reduction<{}, {}>'.format(
+        # TI (index type) must match self.indices.dtype for correct int64
+        # column values. indptr slices are cast to match indices dtype.
+        idx_dtype = self.indices.dtype
+        indptr_x = self.indptr[:len(self.indptr) - 1].astype(idx_dtype,
+                                                              copy=False)
+        indptr_y = self.indptr[1:].astype(idx_dtype, copy=False)
+        ker_name = '_arg_reduction<{}, {}, {}>'.format(
             _scalar.get_typename(self.data.dtype),
-            _scalar.get_typename(out.dtype))
+            _scalar.get_typename(out.dtype),
+            _scalar.get_typename(idx_dtype))
 
         if ufunc == cupy.argmax:
             ker = self._max_arg_reduction_mod.get_function('max' + ker_name)
@@ -1079,8 +1098,8 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
 
         ker((out_shape,), (1,),
             (self.data, self.indices,
-             self.indptr[:len(self.indptr) - 1],
-             self.indptr[1:], cupy.int64(self.shape[axis]),
+             indptr_x, indptr_y,
+             idx_dtype.type(self.shape[axis]),
              out))
 
         return out
