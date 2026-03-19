@@ -1019,6 +1019,73 @@ class TestInt64SpGEMM:
         assert c.indices.dtype == cupy.int32
         testing.assert_array_almost_equal(c.toarray(), cupy.eye(3))
 
+    def test_spgemm_int64_alpha_coefficient(self):
+        # alpha scales all output values: c[i,j] = alpha * sum_k a[i,k]*b[k,j].
+        a_data = cupy.array([2.0])
+        a_indices = cupy.array([0], dtype=cupy.int64)
+        a_indptr = cupy.array([0, 1], dtype=cupy.int64)
+        a = sparse.csr_matrix((a_data, a_indices, a_indptr), shape=(1, 1))
+        b_data = cupy.array([3.0])
+        b_indices = cupy.array([_LARGE], dtype=cupy.int64)
+        b_indptr = cupy.array([0, 1], dtype=cupy.int64)
+        b = sparse.csr_matrix((b_data, b_indices, b_indptr), shape=(1, _LARGE + 1))
+        c = cusparse.spgemm(a, b, alpha=5.0)
+        # c[0, _LARGE] = 5.0 * 2.0 * 3.0 = 30.0
+        assert c.nnz == 1
+        assert int(c.indices[0]) == _LARGE
+        assert float(c.data[0]) == pytest.approx(30.0)
+
+    def test_spgemm_mixed_index_dtypes(self):
+        # A has int32 indices, B has int64 indices (large col value).
+        # The int64 path is triggered by b.indices.dtype and handles
+        # the mixed case by casting A's indices to int64 internally.
+        a_data = cupy.array([4.0])
+        a_indices = cupy.array([0], dtype=cupy.int32)
+        a_indptr = cupy.array([0, 1], dtype=cupy.int32)
+        a = sparse.csr_matrix((a_data, a_indices, a_indptr), shape=(1, 1))
+        b_data = cupy.array([6.0])
+        b_indices = cupy.array([_LARGE], dtype=cupy.int64)
+        b_indptr = cupy.array([0, 1], dtype=cupy.int64)
+        b = sparse.csr_matrix((b_data, b_indices, b_indptr), shape=(1, _LARGE + 1))
+        c = a @ b
+        assert c.nnz == 1
+        assert c.indices.dtype == cupy.int64
+        assert float(c.data[0]) == pytest.approx(24.0)
+
+    def test_spgemm_int64_float32_data(self):
+        # float32 data arrays must remain float32 after int64 SpGEMM.
+        a_data = cupy.array([2.0], dtype=cupy.float32)
+        a_indices = cupy.array([0], dtype=cupy.int64)
+        a_indptr = cupy.array([0, 1], dtype=cupy.int64)
+        a = sparse.csr_matrix((a_data, a_indices, a_indptr), shape=(1, 1))
+        b_data = cupy.array([3.0], dtype=cupy.float32)
+        b_indices = cupy.array([_LARGE], dtype=cupy.int64)
+        b_indptr = cupy.array([0, 1], dtype=cupy.int64)
+        b = sparse.csr_matrix((b_data, b_indices, b_indptr), shape=(1, _LARGE + 1))
+        c = a @ b
+        assert c.dtype == cupy.float32
+        assert c.nnz == 1
+        assert float(c.data[0]) == pytest.approx(6.0)
+
+    def test_spgemm_int64_multiple_output_rows(self):
+        # A(3,1) @ B(1, _LARGE+1): each A row produces one nonzero.
+        # Verifies the row-index expansion (cumsum+searchsorted) works for
+        # multiple rows, not just row 0.
+        a_data = cupy.array([1.0, 2.0, 3.0])
+        a_indices = cupy.array([0, 0, 0], dtype=cupy.int64)
+        a_indptr = cupy.array([0, 1, 2, 3], dtype=cupy.int64)
+        a = sparse.csr_matrix((a_data, a_indices, a_indptr), shape=(3, 1))
+        b_data = cupy.array([10.0])
+        b_indices = cupy.array([_LARGE], dtype=cupy.int64)
+        b_indptr = cupy.array([0, 1], dtype=cupy.int64)
+        b = sparse.csr_matrix((b_data, b_indices, b_indptr), shape=(1, _LARGE + 1))
+        c = a @ b
+        assert c.shape == (3, _LARGE + 1)
+        assert c.nnz == 3
+        # CSR stores rows in order; each row has one nonzero at col _LARGE.
+        expected = cupy.array([10.0, 20.0, 30.0])
+        testing.assert_array_almost_equal(c.data, expected)
+
 
 class TestInt64DtypePreservation:
     """_with_data and construction bypass preserve index dtype.
