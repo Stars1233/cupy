@@ -297,11 +297,13 @@ class csr_matrix(_compressed._compressed_sparse_matrix):
             row_of_each = cupy.searchsorted(
                 self.indptr[1:], nnz_range, side='right').astype(idx_dtype)
             kept_rows = row_of_each[mask]
-            # Build new indptr via unique+scatter (avoids bincount OOM for
-            # large nrows; cupy.add.at is int32-only).
+            # Build new indptr via uint64 reinterpret: CUDA lacks
+            # atomicAdd(long long*,...), but two's-complement addition is
+            # bit-identical for non-negative values, and indptr counts are
+            # bounded by nnz which is far below 2^63.
             new_indptr = cupy.zeros(nrows + 1, dtype=idx_dtype)
-            unique_rows, row_counts = cupy.unique(kept_rows, return_counts=True)
-            new_indptr[unique_rows + 1] = row_counts.astype(idx_dtype)
+            cupy.add.at(new_indptr[1:].view(cupy.uint64), kept_rows,
+                        cupy.uint64(1))
             cupy.cumsum(new_indptr, out=new_indptr)
             self.data = new_data
             self.indices = new_indices

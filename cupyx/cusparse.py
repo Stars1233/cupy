@@ -1180,12 +1180,11 @@ def coo2csr(x):
         indptr = _cupy.zeros(m + 1, dtype=idx_dtype)
     elif idx_dtype == _cupy.int64:
         # TEMPORARY WORKAROUND: xcoo2csr is int32-only.
-        # Use unique+scatter to avoid two simultaneous large allocations.
-        # (bincount would require a m-element output PLUS a separate indptr array.)
-        # cupy.add.at is int32-only and cannot be used here.
-        unique_rows, row_counts = _cupy.unique(x.row, return_counts=True)
+        # CUDA lacks atomicAdd(long long*,...), so reinterpret indptr[1:] as uint64.
+        # Two's-complement addition is bit-identical for non-negative values, and
+        # indptr counts are bounded by nnz which is far below 2^63.
         indptr = _cupy.zeros(m + 1, dtype=idx_dtype)
-        indptr[unique_rows + 1] = row_counts.astype(idx_dtype)
+        _cupy.add.at(indptr[1:].view(_cupy.uint64), x.row, _cupy.uint64(1))
         _cupy.cumsum(indptr, out=indptr)
     else:
         handle = _device.get_cusparse_handle()
@@ -1211,11 +1210,11 @@ def coo2csc(x):
         indptr = _cupy.zeros(n + 1, dtype=idx_dtype)
     elif idx_dtype == _cupy.int64:
         # TEMPORARY WORKAROUND: xcoo2csr (used for cols) is int32-only.
-        # Use unique+scatter to avoid two simultaneous large allocations.
-        # cupy.add.at is int32-only and cannot be used here.
-        unique_cols, col_counts = _cupy.unique(x.col, return_counts=True)
+        # CUDA lacks atomicAdd(long long*,...), so reinterpret indptr[1:] as uint64.
+        # Two's-complement addition is bit-identical for non-negative values, and
+        # indptr counts are bounded by nnz which is far below 2^63.
         indptr = _cupy.zeros(n + 1, dtype=idx_dtype)
-        indptr[unique_cols + 1] = col_counts.astype(idx_dtype)
+        _cupy.add.at(indptr[1:].view(_cupy.uint64), x.col, _cupy.uint64(1))
         _cupy.cumsum(indptr, out=indptr)
     else:
         handle = _device.get_cusparse_handle()
@@ -1305,13 +1304,11 @@ def _cupy_csr2csc_int64(x):
         A._descr = MatDescriptor.create()
         return A
 
-    # Build CSC indptr using unique+scatter to avoid two simultaneous large allocations.
-    # (bincount would require both a col_counts array and csc_indptr in memory at once.)
-    # cupy.add.at is int32-only so bincount+cumsum is used for small n; here we need
-    # one allocation only.
-    unique_cols, col_counts = _cupy.unique(x.indices, return_counts=True)
+    # Build CSC indptr via uint64 reinterpret: CUDA lacks atomicAdd(long long*,...),
+    # but two's-complement addition is bit-identical for non-negative values, and
+    # indptr counts are bounded by nnz which is far below 2^63.
     csc_indptr = _cupy.zeros(n + 1, dtype=idx_dtype)
-    csc_indptr[unique_cols + 1] = col_counts.astype(idx_dtype)
+    _cupy.add.at(csc_indptr[1:].view(_cupy.uint64), x.indices, _cupy.uint64(1))
     _cupy.cumsum(csc_indptr, out=csc_indptr)
 
     # Build row array from CSR indptr using searchsorted.
@@ -1465,10 +1462,11 @@ def _cupy_csc2csr_int64(x):
         A._descr = MatDescriptor.create()
         return A
 
-    # Build CSR indptr using unique+scatter to avoid two simultaneous large allocations.
-    unique_rows, row_counts = _cupy.unique(x.indices, return_counts=True)
+    # Build CSR indptr via uint64 reinterpret: CUDA lacks atomicAdd(long long*,...),
+    # but two's-complement addition is bit-identical for non-negative values, and
+    # indptr counts are bounded by nnz which is far below 2^63.
     csr_indptr = _cupy.zeros(m + 1, dtype=idx_dtype)
-    csr_indptr[unique_rows + 1] = row_counts.astype(idx_dtype)
+    _cupy.add.at(csr_indptr[1:].view(_cupy.uint64), x.indices, _cupy.uint64(1))
     _cupy.cumsum(csr_indptr, out=csr_indptr)
 
     # Build col array from CSC indptr using searchsorted.

@@ -758,13 +758,17 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
         out_data = out_data[sort_key]
 
         # ------------------------------------------------------------------ #
-        # Step 6: build output indptr via unique+scatter.                      #
-        # unique+scatter avoids an O(M) allocation for large M.               #
+        # Step 6: build output indptr via add.at + cumsum.                    #
+        # For int64 indptr, CUDA lacks atomicAdd(long long*,...); reinterpret  #
+        # as uint64 — bit-identical for non-negative counts bounded by nnz.  #
         # ------------------------------------------------------------------ #
         out_idx_dtype = _sputils.get_index_dtype(maxval=max(M, n_idx))
         out_indptr = cupy.zeros(M + 1, dtype=out_idx_dtype)
-        unique_majors, major_counts = cupy.unique(out_major, return_counts=True)
-        out_indptr[unique_majors + 1] = major_counts.astype(out_idx_dtype)
+        if out_idx_dtype == cupy.int64:
+            cupy.add.at(out_indptr[1:].view(cupy.uint64), out_major,
+                        cupy.uint64(1))
+        else:
+            cupy.add.at(out_indptr[1:], out_major, 1)
         cupy.cumsum(out_indptr, out=out_indptr)
 
         # ------------------------------------------------------------------ #
