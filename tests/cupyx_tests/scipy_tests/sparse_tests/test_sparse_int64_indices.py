@@ -2117,3 +2117,105 @@ class TestInt64EmptyEdgeCases:
         assert promoted.indices.dtype == cupy.int64
         assert promoted.indptr.dtype == cupy.int64
         assert promoted.has_sorted_indices
+
+
+class TestInt64SumAxis:
+    """sum(axis=0) and sum(axis=1) with int64 indices.
+
+    sum(axis) works via dot(ones(...)): axis=0 creates ones(nrows),
+    axis=1 creates ones(ncols).  The tests use shapes that keep the
+    ones-vector small to avoid OOM.
+    """
+
+    def test_sum_axis0_large_cols(self):
+        # shape=(2, _LARGE+2): axis=0 creates ones(2) — cheap.
+        data = cupy.array([3.0, 7.0])
+        indices = cupy.array([0, _LARGE], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=(2, _LARGE + 2))
+        s = m.sum(axis=0)
+        assert float(s[0, 0]) == pytest.approx(3.0)
+        assert float(s[0, _LARGE]) == pytest.approx(7.0)
+
+    def test_sum_axis1_large_cols(self):
+        # shape=(2, _LARGE+2): axis=1 creates ones(_LARGE+2) — OOM.
+        # Use small-value int64 matrix to keep ncols small.
+        data = cupy.array([3.0, 7.0])
+        indices = cupy.array([0, 2], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=(2, 5))
+        m.indices = indices  # force int64
+        m.indptr = indptr
+        s = m.sum(axis=1)
+        assert float(s[0, 0]) == pytest.approx(3.0)
+        assert float(s[1, 0]) == pytest.approx(7.0)
+
+    def test_sum_no_axis(self):
+        # sum() allocates ones(ncols); use small shape with int64.
+        data = cupy.array([3.0, 7.0])
+        indices = cupy.array([0, 2], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=(2, 5))
+        m.indices = indices  # force int64
+        m.indptr = indptr
+        assert float(m.sum()) == pytest.approx(10.0)
+
+    def test_sum_axis0_int32_regression(self):
+        data = cupy.array([1.0, 2.0, 3.0])
+        indices = cupy.array([0, 1, 2], dtype=cupy.int32)
+        indptr = cupy.array([0, 2, 3], dtype=cupy.int32)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=(2, 3))
+        s = m.sum(axis=0)
+        testing.assert_array_almost_equal(
+            s, cupy.array([[1.0, 2.0, 3.0]]))
+
+
+class TestInt64EliminateZerosToarray:
+    """eliminate_zeros preserves dense representation.
+
+    After eliminate_zeros, toarray() must give the same result as
+    before (the structural zeros are removed but the dense view
+    is unchanged).  Uses small shapes to allow toarray().
+    """
+
+    def test_eliminate_zeros_toarray_matches(self):
+        # Small matrix with explicit zeros; compare dense before/after.
+        data = cupy.array([1.0, 0.0, 2.0, 0.0])
+        indices = cupy.array([0, 1, 2, 3], dtype=cupy.int64)
+        indptr = cupy.array([0, 2, 4], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=(2, 5))
+        m.indices = indices  # force int64
+        m.indptr = indptr
+        dense_before = m.toarray().copy()
+        m.eliminate_zeros()
+        testing.assert_array_equal(m.toarray(), dense_before)
+        assert m.nnz == 2
+
+    def test_eliminate_zeros_toarray_int32_regression(self):
+        data = cupy.array([1.0, 0.0, 2.0])
+        indices = cupy.array([0, 1, 2], dtype=cupy.int32)
+        indptr = cupy.array([0, 2, 3], dtype=cupy.int32)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=(2, 3))
+        dense_before = m.toarray().copy()
+        m.eliminate_zeros()
+        testing.assert_array_equal(m.toarray(), dense_before)
+        assert m.nnz == 2
+
+
+class TestInt64SumDuplicatesEmpty:
+    """sum_duplicates on empty COO with int64 indices."""
+
+    def test_empty_coo_sum_duplicates(self):
+        m = sparse.coo_matrix((2, _LARGE + 1))
+        assert m.row.dtype == cupy.int64
+        m.sum_duplicates()
+        assert m.nnz == 0
+        assert m.row.dtype == cupy.int64
+        assert m.col.dtype == cupy.int64
+        assert m.has_canonical_format
