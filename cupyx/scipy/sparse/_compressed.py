@@ -327,14 +327,33 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
         self._descr = cusparse.MatDescriptor.create()
         self._shape = shape
 
+    @classmethod
+    def _from_parts(cls, data, indices, indptr, shape):
+        """Construct from pre-validated arrays (no check_contents).
+
+        Internal API for building sparse matrices when the caller has
+        already determined the correct index dtype.  Skips the
+        check_contents=True downcast that the tuple-3 constructor
+        applies.
+
+        Caller must ensure *indices* and *indptr* have the correct
+        dtype and are within bounds for *shape*.
+        """
+        A = cls.__new__(cls)
+        sparse_data._data_matrix.__init__(A, data)
+        A.indices = indices
+        A.indptr = indptr
+        from cupyx.cusparse import MatDescriptor
+        A._descr = MatDescriptor.create()
+        A._shape = shape
+        return A
+
     def _with_data(self, data, copy=True):
-        # Use shape-only constructor + direct assignment to avoid the
-        # tuple-3 constructor's check_contents=True, which silently
-        # downcasts int64 indices to int32 when values fit in int32.
-        A = self.__class__(self.shape, dtype=data.dtype)
-        A.data = data
-        A.indices = self.indices.copy() if copy else self.indices
-        A.indptr = self.indptr.copy() if copy else self.indptr
+        A = self.__class__._from_parts(
+            data,
+            self.indices.copy() if copy else self.indices,
+            self.indptr.copy() if copy else self.indptr,
+            self.shape)
         return A
 
     def _convert_dense(self, x):
@@ -764,18 +783,10 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
         out_indptr = _cusparse_mod._build_indptr(
             out_major, M, out_idx_dtype)
 
-        # --------------------------------------------------------- #
-        # Step 7: build output matrix.                            #
-        # Bypass the tuple-3 constructor (check_contents=True     #
-        # would downcast int64 indices if values fit in int32).   #
-        # Output minor-axis indices are in [0, n_idx): small      #
-        # values even for int64 input, so out_idx_dtype is int32  #
-        # for typical n_idx.                                      #
-        # --------------------------------------------------------- #
-        A_out = self.__class__(new_shape, dtype=self.dtype)
-        A_out.data = out_data
-        A_out.indices = out_minor.astype(out_idx_dtype)
-        A_out.indptr = out_indptr
+        # Build output matrix.
+        A_out = self.__class__._from_parts(
+            out_data, out_minor.astype(out_idx_dtype),
+            out_indptr, new_shape)
         A_out.has_sorted_indices = True
         return A_out
 

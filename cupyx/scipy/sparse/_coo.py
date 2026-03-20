@@ -184,18 +184,32 @@ class coo_matrix(sparse_data._data_matrix):
             raise ValueError('invalid shape (must be a 2-tuple of int)')
         self._shape = int(shape[0]), int(shape[1])
 
+    @classmethod
+    def _from_parts(cls, data, row, col, shape):
+        """Construct from pre-validated arrays (no check_contents).
+
+        Internal API for building COO matrices when the caller has
+        already determined the correct index dtype.  Skips the
+        check_contents=True downcast that the tuple-2 constructor
+        applies.
+        """
+        A = cls.__new__(cls)
+        sparse_data._data_matrix.__init__(A, data)
+        A.row = row
+        A.col = col
+        A._shape = int(shape[0]), int(shape[1])
+        return A
+
     def _with_data(self, data, copy=True):
         """Returns a matrix with the same sparsity structure as self,
         but with different data.  By default the index arrays
         (i.e. .row and .col) are copied.
         """
-        # Use shape-only constructor + direct assignment to avoid the
-        # tuple-2 constructor's check_contents=True, which would silently
-        # downcast int64 indices to int32 when values fit in int32.
-        A = coo_matrix(self.shape, dtype=data.dtype)
-        A.data = data
-        A.row = self.row.copy() if copy else self.row
-        A.col = self.col.copy() if copy else self.col
+        A = coo_matrix._from_parts(
+            data,
+            self.row.copy() if copy else self.row,
+            self.col.copy() if copy else self.col,
+            self.shape)
         A.has_canonical_format = self.has_canonical_format
         return A
 
@@ -522,11 +536,13 @@ class coo_matrix(sparse_data._data_matrix):
         from cupyx import cusparse
 
         if self.nnz == 0:
-            A = _csc.csc_matrix(self.shape, dtype=self.dtype)
-            if self.col.dtype != A.indices.dtype:
-                A.indices = A.indices.astype(self.col.dtype)
-                A.indptr = A.indptr.astype(self.col.dtype)
-            return A
+            idx = self.col.dtype
+            n = self.shape[1]
+            return _csc.csc_matrix._from_parts(
+                cupy.empty(0, self.dtype),
+                cupy.empty(0, idx),
+                cupy.zeros(n + 1, idx),
+                self.shape)
         # copy is silently ignored (in line with SciPy) because both
         # sum_duplicates and coosort change the underlying data
         x = self.copy()
@@ -551,11 +567,13 @@ class coo_matrix(sparse_data._data_matrix):
         from cupyx import cusparse
 
         if self.nnz == 0:
-            A = _csr.csr_matrix(self.shape, dtype=self.dtype)
-            if self.row.dtype != A.indices.dtype:
-                A.indices = A.indices.astype(self.row.dtype)
-                A.indptr = A.indptr.astype(self.row.dtype)
-            return A
+            idx = self.row.dtype
+            m = self.shape[0]
+            return _csr.csr_matrix._from_parts(
+                cupy.empty(0, self.dtype),
+                cupy.empty(0, idx),
+                cupy.zeros(m + 1, idx),
+                self.shape)
         # copy is silently ignored (in line with SciPy) because both
         # sum_duplicates and coosort change the underlying data
         x = self.copy()

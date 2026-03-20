@@ -119,18 +119,13 @@ def _compressed_sparse_stack(blocks, axis):
         sum_dim += b.shape[axis]
         last_indptr += b.indptr[-1]
     indptr[-1] = last_indptr
-    # Bypass the tuple-3 constructor's check_contents=True downcast.
-    # The shape-only constructor initialises _descr and _shape; we then
-    # overwrite data/indices/indptr directly, preserving the idx_dtype
-    # computed above (which respects int64 inputs via check_contents=False).
     if axis == 0:
-        A = _csr.csr_matrix((sum_dim, constant_dim))
+        cls = _csr.csr_matrix
+        shape = (sum_dim, constant_dim)
     else:
-        A = _csc.csc_matrix((constant_dim, sum_dim))
-    A.data = data
-    A.indices = indices
-    A.indptr = indptr
-    return A
+        cls = _csc.csc_matrix
+        shape = (constant_dim, sum_dim)
+    return cls._from_parts(data, indices, indptr, shape)
 
 
 def hstack(blocks, format=None, dtype=None):
@@ -328,14 +323,7 @@ def bmat(blocks, format=None, dtype=None):
         col[idx] = B.col + col_offsets[j]
         nnz += B.nnz
 
-    # Bypass the COO constructor's check_contents=True downcast: the
-    # constructor would re-evaluate idx_dtype with maxval=max(shape) and
-    # downcast int64 arrays whose values fit in int32.  Instead, build via
-    # the shape-only constructor and assign arrays directly.
-    A = _coo.coo_matrix(shape, dtype=dtype)
-    A.data = data
-    A.row = row
-    A.col = col
+    A = _coo.coo_matrix._from_parts(data, row, col, shape)
     A.has_canonical_format = False
     return A.asformat(format)
 

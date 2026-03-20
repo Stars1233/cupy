@@ -92,10 +92,9 @@ def _with_indices_dtype(m, dtype):
     Data array is shared (no copy).  Used to promote int32 index arrays to
     int64 before calling a cuSPARSE function that requires uniform int64.
     """
-    c = m.__class__(m.shape, dtype=m.dtype)
-    c.data = m.data
-    c.indices = m.indices.astype(dtype)
-    c.indptr = m.indptr.astype(dtype)
+    c = m.__class__._from_parts(
+        m.data, m.indices.astype(dtype), m.indptr.astype(dtype),
+        m.shape)
     c.has_canonical_format = m.has_canonical_format
     c.has_sorted_indices = m.has_sorted_indices
     return c
@@ -599,10 +598,8 @@ def _cupy_csrgeam_int64(a, b, alpha, beta):
     rows = _cupy.concatenate([a_rows, b_rows])
     cols = _cupy.concatenate([a.indices, b.indices])
     data = _cupy.concatenate([a_data, b_data])
-    coo = cupyx.scipy.sparse.coo_matrix(a.shape, dtype=a.dtype)
-    coo.data = data
-    coo.row = rows
-    coo.col = cols
+    coo = cupyx.scipy.sparse.coo_matrix._from_parts(
+        data, rows, cols, a.shape)
     coo.has_canonical_format = False
     coo.sum_duplicates()
     return coo.tocsr()
@@ -1201,12 +1198,8 @@ def coo2csr(x):
         _cusparse.xcoo2csr(
             handle, x.row.data.ptr, nnz, m,
             indptr.data.ptr, _cusparse.CUSPARSE_INDEX_BASE_ZERO)
-    # Bypass check_contents=True downcast; preserve int64 dtype.
-    A = cupyx.scipy.sparse.csr_matrix(x.shape, dtype=x.dtype)
-    A.data = x.data
-    A.indices = x.col
-    A.indptr = indptr
-    return A
+    return cupyx.scipy.sparse.csr_matrix._from_parts(
+        x.data, x.col, indptr, x.shape)
 
 
 def coo2csc(x):
@@ -1224,12 +1217,8 @@ def coo2csc(x):
         _cusparse.xcoo2csr(
             handle, x.col.data.ptr, nnz, n,
             indptr.data.ptr, _cusparse.CUSPARSE_INDEX_BASE_ZERO)
-    # Bypass check_contents=True downcast; preserve int64 dtype.
-    A = cupyx.scipy.sparse.csc_matrix(x.shape, dtype=x.dtype)
-    A.data = x.data
-    A.indices = x.row
-    A.indptr = indptr
-    return A
+    return cupyx.scipy.sparse.csc_matrix._from_parts(
+        x.data, x.row, indptr, x.shape)
 
 
 def csr2coo(x, data, indices):
@@ -1259,11 +1248,8 @@ def csr2coo(x, data, indices):
         _cusparse.xcsr2coo(
             handle, x.indptr.data.ptr, nnz, m, row.data.ptr,
             _cusparse.CUSPARSE_INDEX_BASE_ZERO)
-    # Bypass check_contents=True downcast; preserve int64 dtype.
-    A = cupyx.scipy.sparse.coo_matrix(x.shape, dtype=x.dtype)
-    A.data = data
-    A.row = row
-    A.col = indices
+    A = cupyx.scipy.sparse.coo_matrix._from_parts(
+        data, row, indices, x.shape)
     A.has_canonical_format = False
     return A
 
@@ -1283,15 +1269,11 @@ def _cupy_transpose_compressed_int64(x, output_cls, out_dim):
     idx_dtype = x.indices.dtype  # int64
 
     if nnz == 0:
-        # object.__new__ bypasses __init__: must set all attributes.
-        # Needed because shape-only constructor OOMs for large dim,
-        # and tuple-3 constructor downcasts int64 via check_contents.
-        A = object.__new__(output_cls)
-        A.data = _cupy.empty(0, x.dtype)
-        A.indices = _cupy.empty(0, idx_dtype)
-        A.indptr = _cupy.zeros(out_dim + 1, idx_dtype)
-        A._shape = x.shape
-        A._descr = MatDescriptor.create()
+        A = output_cls._from_parts(
+            _cupy.empty(0, x.dtype),
+            _cupy.empty(0, idx_dtype),
+            _cupy.zeros(out_dim + 1, idx_dtype),
+            x.shape)
         A.has_sorted_indices = True
         return A
 
@@ -1301,12 +1283,8 @@ def _cupy_transpose_compressed_int64(x, output_cls, out_dim):
     # Sort by (output major, output minor) for canonical order.
     order = _cupy.lexsort(_cupy.stack([expanded, x.indices]))
 
-    A = object.__new__(output_cls)
-    A.data = x.data[order]
-    A.indices = expanded[order]
-    A.indptr = out_indptr
-    A._shape = x.shape
-    A._descr = MatDescriptor.create()
+    A = output_cls._from_parts(
+        x.data[order], expanded[order], out_indptr, x.shape)
     A.has_sorted_indices = True
     return A
 
@@ -1400,11 +1378,8 @@ def csc2coo(x, data, indices):
         _cusparse.xcsr2coo(
             handle, x.indptr.data.ptr, nnz, n, col.data.ptr,
             _cusparse.CUSPARSE_INDEX_BASE_ZERO)
-    # Bypass check_contents=True downcast; preserve int64 dtype.
-    A = cupyx.scipy.sparse.coo_matrix(x.shape, dtype=x.dtype)
-    A.data = data
-    A.row = indices
-    A.col = col
+    A = cupyx.scipy.sparse.coo_matrix._from_parts(
+        data, indices, col, x.shape)
     A.has_canonical_format = False
     return A
 
@@ -2375,11 +2350,11 @@ def _cupy_spgemm_int64(a, b, alpha):
     total_products = int(products_per_a.sum())
 
     if total_products == 0:
-        # Bypass constructor to preserve idx_dtype.
-        c = cupyx.scipy.sparse.csr_matrix((m, n), dtype=a.dtype)
-        c.indices = _cupy.empty(0, idx_dtype)
-        c.indptr = _cupy.zeros(m + 1, idx_dtype)
-        return c
+        return cupyx.scipy.sparse.csr_matrix._from_parts(
+            _cupy.empty(0, a.dtype),
+            _cupy.empty(0, idx_dtype),
+            _cupy.zeros(m + 1, idx_dtype),
+            (m, n))
 
     # Expand products via cumsum + searchsorted (cupy.repeat
     # doesn't accept CuPy ndarray counts).
