@@ -276,8 +276,7 @@ class csr_matrix(_compressed._compressed_sparse_matrix):
         from cupyx import cusparse
 
         if self.indices.dtype == cupy.int64:
-            # csr2csr_compress is int32-only (Legacy API).
-            # Use boolean masking + searchsorted for int64 matrices.
+            # TODO(cuSPARSE): remove when csr2csr_compress supports int64
             mask = self.data != 0
             if mask.all():
                 return
@@ -671,8 +670,8 @@ __device__ inline I get_row_id(I i, I min, I max, const I *indptr) {
     }
     return row;
 }
-// Helper: atomicAdd for I=int or I=long long
-// (CUDA has no signed-int64 atomicAdd).
+// TODO(cupy): remove when cupy.add.at supports int64 natively.
+// CUDA has no atomicAdd(long long*, long long).
 template<typename I>
 __device__ inline void _atomic_add_one(I* addr) {
     atomicAdd(addr, (I)1);

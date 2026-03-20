@@ -1403,8 +1403,8 @@ cdef f_type cusparseSparseToDense = <f_type>_lib.get('SparseToDense')
 cdef f_type cusparseDenseToSparse_bufferSize = <f_type>_lib.get('DenseToSparse_bufferSize')  # NOQA
 cdef f_type cusparseDenseToSparse_analysis = <f_type>_lib.get('DenseToSparse_analysis')  # NOQA
 cdef f_type cusparseDenseToSparse_convert = <f_type>_lib.get('DenseToSparse_convert')  # NOQA
-# cuSPARSE SpGEAM (Generic API sparse addition, int64-ready).
-# Loaded via SoftLink so this works on cuSPARSE builds that predate the API.
+# TODO(cuSPARSE): SpGEAM not yet in any public release.
+# Loaded via SoftLink; returns NULL on builds without SpGEAM.
 cdef f_type cusparseSpGEAM_createDescr = <f_type>_lib.get('SpGEAM_createDescr')
 cdef f_type cusparseSpGEAM_destroyDescr = <f_type>_lib.get('SpGEAM_destroyDescr')
 cdef f_type cusparseSpGEAM_bufferSize = <f_type>_lib.get('SpGEAM_bufferSize')

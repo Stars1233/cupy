@@ -69,9 +69,8 @@ cdef extern from *:
     # CSR2CSC
     ctypedef int Csr2CscAlg 'cusparseCsr2CscAlg_t'
 
-# Forward-declare SpGEAM types for cuSPARSE builds that predate public release.
-# When the real cusparse.h includes these types, CUSPARSE_SPGEAM_ALG_DEFAULT
-# will be defined via the enum, so the guard fires and skips our stubs.
+# TODO(cuSPARSE): remove stubs when SpGEAM ships in a public release.
+# The #ifndef guard auto-deactivates when the real header defines these.
 cdef extern from *:
     """
     #ifndef CUSPARSE_SPGEAM_ALG_DEFAULT

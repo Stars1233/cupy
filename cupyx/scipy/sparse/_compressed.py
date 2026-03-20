@@ -695,16 +695,11 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
         return out
 
     def _minor_index_fancy_sorted(self, idx, M, n_idx, new_shape):
+        # TODO(cuSPARSE): unify with int32 path when kernels
+        #   support int64 indices (avoids O(N) histogram OOM).
         """Sort-based fancy minor-axis indexing for int64 indices.
 
-        TEMPORARY WORKAROUND: The histogram-based kernels (bincount_idx_global,
-        row_kept_count, fill_B) allocate O(N) work-space where N is the number
-        of minor-axis elements.  For int64 matrices N can exceed INT32_MAX,
-        making the allocation OOM (e.g. N=2**32 → 16 GB for int32 counts).
-        The kernels also use const int* for index parameters, silently
-        truncating int64 column values > INT32_MAX.
-
-        This implementation avoids O(N) entirely:
+        Uses O(nnz + n_idx) instead of O(N):
           - Time:  O((nnz + n_idx) log(nnz + n_idx))
           - Space: O(nnz + n_idx + nnz_out)  [no N-sized buffer]
 

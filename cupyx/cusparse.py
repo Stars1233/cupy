@@ -68,10 +68,11 @@ def _check_int32_indices(a, func_name):
 
 
 def _indptr_to_coo(indptr, nnz, dtype=None):
+    # TODO(cupy): simplify when cupy.repeat accepts ndarray counts
     """Expand compressed indptr to per-nnz major-axis indices.
 
-    Equivalent to ``repeat(arange(nrows), diff(indptr))`` but avoids
-    the cupy.repeat limitation with CuPy ndarray repeat-counts.
+    Equivalent to ``repeat(arange(nrows), diff(indptr))`` but uses
+    searchsorted instead.
     """
     if dtype is None:
         dtype = indptr.dtype
@@ -81,6 +82,7 @@ def _indptr_to_coo(indptr, nnz, dtype=None):
 
 
 def _build_indptr(row_indices, n_rows, dtype):
+    # TODO(cupy): simplify when cupy.add.at supports int64
     """Build compressed indptr from per-nnz major-axis assignments.
 
     Uses ``add.at(view(uint64))`` for int64 because CUDA lacks
@@ -169,15 +171,12 @@ _available_cusparse_version = {
     'sparseToDense': (11300, None),
     'spgemm': (11100, None),
     'spsm': (11600, None),  # CUDA 11.3.1
-    # SpGEAM exists in the cuSPARSE dev header (12.5.8) but has never shipped
-    # in any public CUDA release (confirmed absent through 13.2, latest as of
-    # 2026-03-20).  Placeholder keeps check_availability() returning False;
-    # update once SpGEAM appears in release notes.
+    # TODO(cuSPARSE): update when SpGEAM ships in a public release.
+    # Absent from all releases through CUDA 13.2 (checked 2026-03-20).
     'spgeam': (99000, None),
-    # spGEMM with int64 indices: added in CUDA 13.0 per official release notes
-    # (CUSPARSE-2365, "Added support for 64-bit index matrices in SpGEMM").
-    # cuSPARSE version encoding: major*1000 + minor*100 + patch; CUDA 13.0
-    # ships cuSPARSE 13.0.x → version >= 13000.  Absent from all 12.x releases.
+    # TODO(cuSPARSE): verify on CUDA 13.0+ hardware.
+    # CUSPARSE-2365 added int64 SpGEMM in CUDA 13.0.
+    # Encoding: major*1000 + minor*100 + patch → 13000.
     # hipSPARSE entry is (_numpy.inf, None) below — hipSPARSE spGEMM is int32.
     'spgemm_int64': (13000, None),
 }
@@ -217,8 +216,9 @@ _available_hipsparse_version = {
     'sparseToDense': (402, None),
     'spgemm': (_numpy.inf, None),
     'spsm': (50000000, None),
-    'spgeam': (_numpy.inf, None),  # hipSPARSE has no SpGEAM equivalent
-    'spgemm_int64': (_numpy.inf, None),  # hipSPARSE spGEMM is int32-only
+    # TODO(hipSPARSE): update when hipSPARSE adds these
+    'spgeam': (_numpy.inf, None),
+    'spgemm_int64': (_numpy.inf, None),
 }
 
 
@@ -591,10 +591,10 @@ def csrgeam(a, b, alpha=1, beta=1):
 
 
 def _cupy_csrgeam_int64(a, b, alpha, beta):
+    # TODO(cuSPARSE): remove when SpGEAM ships publicly
     """Pure-CuPy CSR addition for int64: C = alpha*A + beta*B.
 
-    SpGEAM is not yet in public CUDA releases.  Uses COO
-    concatenation + sum_duplicates.  O(nnz log nnz).
+    Uses COO concatenation + sum_duplicates.  O(nnz log nnz).
     """
     idx_dtype = _numpy.result_type(a.indices.dtype, b.indices.dtype)
     # Use dtype.type() to get a numpy scalar (not a 0-d array) so that CuPy's
@@ -637,14 +637,10 @@ def csrgeam2(a, b, alpha=1, beta=1):
     if not isinstance(b, cupyx.scipy.sparse.csr_matrix):
         raise TypeError('unsupported type (actual: {})'.format(type(b)))
 
-    # Route int64 BEFORE the availability check: the pure-CuPy fallback
-    # requires no cuSPARSE and must work even on old CUDA where csrgeam2 is
-    # absent.
+    # TODO(cuSPARSE): pure-CuPy fallback removable once SpGEAM ships
     if a.indices.dtype == _cupy.int64 or b.indices.dtype == _cupy.int64:
         if check_availability('spgeam'):
             return spgeam(a, b, alpha, beta)
-        # Pure-CuPy fallback (works on all CUDA versions):
-        # WORKAROUND until cusparseSpGEAM ships in a public release.
         a, b = _cast_common_type(a, b)
         return _cupy_csrgeam_int64(a, b, alpha, beta)
 
@@ -1050,7 +1046,7 @@ def csrsort(x):
     m, n = x.shape
 
     if x.indices.dtype == _cupy.int64:
-        # xcsrsort is int32-only; use lexsort fallback.
+        # TODO(cuSPARSE): remove when xcsrsort supports int64
         row = _indptr_to_coo(x.indptr, nnz)
         order = _cupy.lexsort(_cupy.stack([x.indices, row]))
         x.indices[:] = x.indices[order]
@@ -1096,7 +1092,7 @@ def cscsort(x):
     m, n = x.shape
 
     if x.indices.dtype == _cupy.int64:
-        # xcscsort is int32-only; use lexsort fallback.
+        # TODO(cuSPARSE): remove when xcscsort supports int64
         col = _indptr_to_coo(x.indptr, nnz)
         order = _cupy.lexsort(_cupy.stack([x.indices, col]))
         x.indices[:] = x.indices[order]
@@ -1143,7 +1139,7 @@ def coosort(x, sort_by='r'):
     m, n = x.shape
 
     if x.row.dtype == _cupy.int64:
-        # xcoosort is int32-only; use lexsort fallback.
+        # TODO(cuSPARSE): remove when xcoosort supports int64
         if sort_by == 'r':
             # Sort by (row, col): primary=row, secondary=col
             order = _cupy.lexsort(_cupy.stack([x.col, x.row]))
@@ -1201,7 +1197,7 @@ def coo2csr(x):
     if nnz == 0:
         indptr = _cupy.zeros(m + 1, dtype=idx_dtype)
     elif idx_dtype == _cupy.int64:
-        # xcoo2csr is int32-only.
+        # TODO(cuSPARSE): remove when xcoo2csr supports int64
         indptr = _build_indptr(x.row, m, idx_dtype)
     else:
         handle = _device.get_cusparse_handle()
@@ -1220,7 +1216,7 @@ def coo2csc(x):
     if nnz == 0:
         indptr = _cupy.zeros(n + 1, dtype=idx_dtype)
     elif idx_dtype == _cupy.int64:
-        # xcoo2csr is int32-only.
+        # TODO(cuSPARSE): remove when xcoo2csr supports int64
         indptr = _build_indptr(x.col, n, idx_dtype)
     else:
         handle = _device.get_cusparse_handle()
@@ -1249,7 +1245,7 @@ def csr2coo(x, data, indices):
     idx_dtype = x.indptr.dtype
 
     if idx_dtype == _cupy.int64:
-        # xcsr2coo is int32-only; use searchsorted fallback.
+        # TODO(cuSPARSE): remove when xcsr2coo supports int64
         row = _indptr_to_coo(x.indptr, nnz)
     else:
         if not check_availability('csr2coo'):
@@ -1266,9 +1262,10 @@ def csr2coo(x, data, indices):
 
 
 def _cupy_transpose_compressed_int64(x, output_cls, out_dim):
+    # TODO(cuSPARSE): remove when csr2cscEx2 supports int64
     """Pure-CuPy CSR↔CSC transpose for int64 indices.
 
-    csr2cscEx2 is int32-only.  Uses _build_indptr + lexsort.
+    Uses _build_indptr + lexsort.
     O(nnz log nnz) time.
 
     Args:
@@ -1305,7 +1302,7 @@ def csr2csc(x):
         raise RuntimeError('csr2csc is not available.')
 
     if x.indices.dtype == _cupy.int64:
-        # csr2csc is int32-only.
+        # TODO(cuSPARSE): remove when csr2csc supports int64
         return _cupy_transpose_compressed_int64(
             x, cupyx.scipy.sparse.csc_matrix, int(x.shape[1]))
 
@@ -1334,7 +1331,7 @@ def csr2cscEx2(x):
         raise RuntimeError('csr2cscEx2 is not available.')
 
     if x.indices.dtype == _cupy.int64:
-        # csr2cscEx2 is int32-only.
+        # TODO(cuSPARSE): remove when csr2cscEx2 supports int64
         return _cupy_transpose_compressed_int64(
             x, cupyx.scipy.sparse.csc_matrix, int(x.shape[1]))
 
@@ -1381,7 +1378,7 @@ def csc2coo(x, data, indices):
     idx_dtype = x.indptr.dtype
 
     if idx_dtype == _cupy.int64:
-        # xcsr2coo is int32-only; use searchsorted fallback.
+        # TODO(cuSPARSE): remove when xcsr2coo supports int64
         col = _indptr_to_coo(x.indptr, nnz)
     else:
         handle = _device.get_cusparse_handle()
@@ -1402,7 +1399,7 @@ def csc2csr(x):
         raise RuntimeError('csr2csc is not available.')
 
     if x.indices.dtype == _cupy.int64:
-        # csc2csr is int32-only.
+        # TODO(cuSPARSE): remove when csc2csr supports int64
         return _cupy_transpose_compressed_int64(
             x, cupyx.scipy.sparse.csr_matrix, int(x.shape[0]))
 
@@ -1431,7 +1428,7 @@ def csc2csrEx2(x):
         raise RuntimeError('csc2csrEx2 is not available.')
 
     if x.indices.dtype == _cupy.int64:
-        # csc2csrEx2 is int32-only.
+        # TODO(cuSPARSE): remove when csc2csrEx2 supports int64
         return _cupy_transpose_compressed_int64(
             x, cupyx.scipy.sparse.csr_matrix, int(x.shape[0]))
 
@@ -2325,6 +2322,7 @@ def spsm(a, b, alpha=1.0, lower=True, unit_diag=False, transa=False):
 
 
 def _cupy_spgemm_int64(a, b, alpha):
+    # TODO(cuSPARSE): remove once CUDA 13.0 int64 SpGEMM verified
     """Pure-CuPy sort-merge SpGEMM for int64: C = alpha * A * B.
 
     Used on CUDA < 13.0 where cuSPARSE spGEMM lacks int64.
@@ -2357,8 +2355,7 @@ def _cupy_spgemm_int64(a, b, alpha):
             _cupy.zeros(m + 1, idx_dtype),
             (m, n))
 
-    # Expand products via cumsum + searchsorted (cupy.repeat
-    # doesn't accept CuPy ndarray counts).
+    # TODO(cupy): simplify when cupy.repeat accepts ndarray counts
     cum_prod = _cupy.zeros(a.nnz + 1, dtype=_cupy.int64)
     _cupy.cumsum(products_per_a.astype(_cupy.int64), out=cum_prod[1:])
     prod_pos = _cupy.arange(total_products, dtype=_cupy.int64)
@@ -2409,17 +2406,8 @@ def spgemm(a, b, alpha=1):
     if not isinstance(b, cupyx.scipy.sparse.csr_matrix):
         raise TypeError('unsupported type (actual: {})'.format(type(b)))
 
-    # Handle int64 index matrices BEFORE the availability check so that the
-    # pure-CuPy fallback works on all CUDA versions.
-    #
-    # cuSPARSE spGEMM requires all three matrices (A, B, C) to share the same
-    # index type.  CUDA 13.0 added native int64 support (CUSPARSE-2365);
-    # absent from all 12.x releases.
-    #
-    # Always use cuSPARSE when possible, even for mixed int32/int64
-    # inputs — upcast the int32 matrix to int64 (uniform type required by
-    # cuSPARSE) rather than falling back to the pure-CuPy path.  Pure-CuPy
-    # is only used when the native API is unavailable (CUDA < 13.0).
+    # TODO(cuSPARSE): remove fallback once CUDA 13.0 int64 SpGEMM verified.
+    # Mixed int32/int64 inputs: upcast to int64, prefer cuSPARSE.
     if a.indices.dtype == _cupy.int64 or b.indices.dtype == _cupy.int64:
         if a.shape[1] != b.shape[0]:
             raise ValueError('mismatched shape')

@@ -140,7 +140,7 @@ def _csr_row_index(Ax, Aj, Ap, rows):
 
 
 def _csr_indptr_to_coo_rows(nnz, Bp):
-    # xcsr2coo only supports int32.
+    # TODO(cuSPARSE): remove when xcsr2coo supports int64
     if Bp.dtype == cupy.int64:
         from cupyx.cusparse import _indptr_to_coo
         return _indptr_to_coo(Bp, nnz)
