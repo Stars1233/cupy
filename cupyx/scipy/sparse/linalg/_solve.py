@@ -520,12 +520,8 @@ def spsolve(A, b):
                       sparse.SparseEfficiencyWarning)
         A = A.tocsr()
 
-    if A.indices.dtype == cupy.int64:
-        raise ValueError(
-            'spsolve does not support int64 indices '
-            '(cusolverSp csrlsvqr is int32-only). '
-            'Cast indices to int32 if they fit: '
-            'A.indices.astype(cupy.int32)')
+    from cupyx.cusparse import _check_int32_indices
+    _check_int32_indices(A, 'spsolve')
 
     A.sum_duplicates()
     b = b.astype(A.dtype, copy=False)

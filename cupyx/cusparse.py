@@ -56,6 +56,17 @@ def _cast_common_type(*xs):
             for x in xs]
 
 
+def _check_int32_indices(a, func_name):
+    """Raise ValueError if *a* has int64 indices."""
+    if a.indices.dtype == _cupy.int64:
+        raise ValueError(
+            '{} does not support int64 indices '
+            '(cuSPARSE {} is int32-only). '
+            'Cast to int32 if values fit: '
+            'a.indices.astype(cupy.int32)'.format(
+                func_name, func_name))
+
+
 def _indptr_to_coo(indptr, nnz, dtype=None):
     """Expand compressed indptr to per-nnz major-axis indices.
 
@@ -1863,12 +1874,7 @@ def csrsm2(a, b, alpha=1.0, lower=True, unit_diag=False, transa=False,
         raise ValueError('invalid shape')
     if a.dtype != b.dtype:
         raise TypeError('dtype mismatch')
-    if a.indices.dtype == _cupy.int64:
-        raise ValueError(
-            'csrsm2 does not support int64 indices '
-            '(cuSPARSE csrsm2 is int32-only). '
-            'Cast indices to int32 if they fit: '
-            'a.indices.astype(cupy.int32)')
+    _check_int32_indices(a, 'csrsm2')
 
     if lower is True:
         fill_mode = _cusparse.CUSPARSE_FILL_MODE_LOWER
@@ -1992,12 +1998,7 @@ def csrilu02(a, level_info=False):
         raise TypeError('a must be CSR sparse matrix')
     if a.shape[0] != a.shape[1]:
         raise ValueError('invalid shape (a.shape: {})'.format(a.shape))
-    if a.indices.dtype == _cupy.int64:
-        raise ValueError(
-            'csrilu02 does not support int64 indices '
-            '(cuSPARSE csrilu02 is int32-only). '
-            'Cast indices to int32 if they fit: '
-            'a.indices.astype(cupy.int32)')
+    _check_int32_indices(a, 'csrilu02')
 
     if level_info is False:
         policy = _cusparse.CUSPARSE_SOLVE_POLICY_NO_LEVEL

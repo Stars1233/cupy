@@ -64,27 +64,34 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
             z[tid] = running_value;
         }'''
 
+    # Index type specializations: int (int32) and long long (int64).
+    _idx_types = ('int', 'long long')
+
     _max_reduction_mod = _core.RawModule(
         code=string.Template(_max_min_reduction_code).substitute(
             func='max_reduction', op='>', cond='block_length == length'),
-        name_expressions=['max_reduction<int>', 'max_reduction<long long>'])
+        name_expressions=[
+            f'max_reduction<{t}>' for t in _idx_types])
 
     _max_nonzero_reduction_mod = _core.RawModule(
         code=string.Template(_max_min_reduction_code).substitute(
-            func='max_nonzero_reduction', op='>', cond='block_length > 0'),
+            func='max_nonzero_reduction', op='>',
+            cond='block_length > 0'),
         name_expressions=[
-            'max_nonzero_reduction<int>', 'max_nonzero_reduction<long long>'])
+            f'max_nonzero_reduction<{t}>' for t in _idx_types])
 
     _min_reduction_mod = _core.RawModule(
         code=string.Template(_max_min_reduction_code).substitute(
             func='min_reduction', op='<', cond='block_length == length'),
-        name_expressions=['min_reduction<int>', 'min_reduction<long long>'])
+        name_expressions=[
+            f'min_reduction<{t}>' for t in _idx_types])
 
     _min_nonzero_reduction_mod = _core.RawModule(
         code=string.Template(_max_min_reduction_code).substitute(
-            func='min_nonzero_reduction', op='<', cond='block_length > 0'),
+            func='min_nonzero_reduction', op='<',
+            cond='block_length > 0'),
         name_expressions=[
-            'min_nonzero_reduction<int>', 'min_nonzero_reduction<long long>'])
+            f'min_nonzero_reduction<{t}>' for t in _idx_types])
 
     # For _max_arg_reduction_mod and _min_arg_reduction_mod below, we pick
     # the right template specialization according to input dtypes at runtime.
@@ -144,33 +151,25 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
             z[tid] = (T2)data_index;
         }'''
 
+    # T1=data type, T2=output type, TI=index type
+    _arg_reduction_types = [
+        f'{{func}}_arg_reduction<{t1}, {t2}, {ti}>'
+        for t1 in ('float', 'double')
+        for t2 in ('int', 'long long')
+        for ti in ('int', 'long long')
+    ]
+
     _max_arg_reduction_mod = _core.RawModule(
         code=string.Template(_argmax_argmin_code).substitute(
             func='max', op='>'),
         name_expressions=[
-            'max_arg_reduction<float, int, int>',
-            'max_arg_reduction<float, long long, int>',
-            'max_arg_reduction<double, int, int>',
-            'max_arg_reduction<double, long long, int>',
-            'max_arg_reduction<float, int, long long>',
-            'max_arg_reduction<float, long long, long long>',
-            'max_arg_reduction<double, int, long long>',
-            'max_arg_reduction<double, long long, long long>',
-        ])
+            t.format(func='max') for t in _arg_reduction_types])
 
     _min_arg_reduction_mod = _core.RawModule(
         code=string.Template(_argmax_argmin_code).substitute(
             func='min', op='<'),
         name_expressions=[
-            'min_arg_reduction<float, int, int>',
-            'min_arg_reduction<float, long long, int>',
-            'min_arg_reduction<double, int, int>',
-            'min_arg_reduction<double, long long, int>',
-            'min_arg_reduction<float, int, long long>',
-            'min_arg_reduction<float, long long, long long>',
-            'min_arg_reduction<double, int, long long>',
-            'min_arg_reduction<double, long long, long long>',
-        ])
+            t.format(func='min') for t in _arg_reduction_types])
 
     # TODO(leofang): rewrite a more load-balanced approach than this naive one?
     _has_sorted_indices_kern = _core.ElementwiseKernel(
