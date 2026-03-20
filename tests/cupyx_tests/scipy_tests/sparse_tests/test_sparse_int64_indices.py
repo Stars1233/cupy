@@ -1727,3 +1727,393 @@ class TestInt64ConversionPreservation:
         assert csr.indices.dtype == cupy.int64
         assert csr.indptr.dtype == cupy.int64
         assert csr.nnz == 0
+
+
+class TestInt64RealImag:
+    """The .real and .imag properties preserve int64 index dtype.
+
+    These properties use _with_data(self.data.real / .imag), which
+    goes through the _with_data bypass that constructs via the
+    shape-only constructor to avoid check_contents=True downcast.
+    """
+
+    _shape = (2, _LARGE + 2)
+
+    def _make_int64_csr(self, value=1.0+2.0j):
+        data = cupy.array([value])
+        indices = cupy.array([_LARGE], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 1], dtype=cupy.int64)
+        return sparse.csr_matrix(
+            (data, indices, indptr), shape=self._shape)
+
+    def test_real_preserves_int64(self):
+        m = self._make_int64_csr(1.0+2.0j)
+        r = m.real
+        assert r.indices.dtype == cupy.int64
+        assert r.indptr.dtype == cupy.int64
+        assert int(r.indices[0]) == _LARGE
+        assert float(r.data[0]) == pytest.approx(1.0)
+
+    def test_imag_preserves_int64(self):
+        m = self._make_int64_csr(1.0+2.0j)
+        im = m.imag
+        assert im.indices.dtype == cupy.int64
+        assert im.indptr.dtype == cupy.int64
+        assert int(im.indices[0]) == _LARGE
+        assert float(im.data[0]) == pytest.approx(2.0)
+
+    def test_real_float_is_identity(self):
+        # .real on a real-valued matrix returns an identical matrix.
+        m = self._make_int64_csr(5.0+0j)
+        r = m.real
+        assert r.indices.dtype == cupy.int64
+        assert r.nnz == m.nnz
+        testing.assert_array_almost_equal(r.data, cupy.array([5.0]))
+
+    def test_imag_float_is_zero(self):
+        # .imag on a real-valued matrix returns a zero matrix.
+        data = cupy.array([5.0])
+        indices = cupy.array([_LARGE], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 1], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=self._shape)
+        im = m.imag
+        assert im.indices.dtype == cupy.int64
+        assert float(im.data.sum()) == pytest.approx(0.0)
+
+    def test_coo_real_preserves_int64(self):
+        data = cupy.array([3.0+4.0j])
+        row = cupy.array([0], dtype=cupy.int64)
+        col = cupy.array([_LARGE], dtype=cupy.int64)
+        m = sparse.coo_matrix(
+            (data, (row, col)), shape=self._shape)
+        r = m.real
+        assert r.row.dtype == cupy.int64
+        assert r.col.dtype == cupy.int64
+        assert float(r.data[0]) == pytest.approx(3.0)
+
+    def test_csc_imag_preserves_int64(self):
+        data = cupy.array([3.0+4.0j])
+        indices = cupy.array([_LARGE], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 1], dtype=cupy.int64)
+        m = sparse.csc_matrix(
+            (data, indices, indptr), shape=(_LARGE + 2, 2))
+        im = m.imag
+        assert im.indices.dtype == cupy.int64
+        assert im.indptr.dtype == cupy.int64
+        assert float(im.data[0]) == pytest.approx(4.0)
+
+    def test_real_small_values_preserves_int64(self):
+        # .real must preserve int64 even when index values fit in
+        # int32.  Uses the force-assign pattern to bypass downcast.
+        data = cupy.array([1.0+2.0j, 3.0+4.0j])
+        indices = cupy.array([0, 1], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=(2, 3))
+        m.indices = indices
+        m.indptr = indptr
+        r = m.real
+        assert r.indices.dtype == cupy.int64
+        assert r.indptr.dtype == cupy.int64
+
+
+class TestInt64Trace:
+    """trace() works on int64 sparse matrices.
+
+    trace(offset) delegates to diagonal(k=offset).sum().  diagonal()
+    uses the _cupy_csr_diagonal kernel, which is int64-aware (uses
+    template parameter I for index arrays).
+    """
+
+    _shape = (2, _LARGE + 2)
+
+    def test_trace_int64_off_diagonal(self):
+        # Entry at (0, _LARGE) is off the main diagonal → trace = 0.
+        data = cupy.array([7.0])
+        indices = cupy.array([_LARGE], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 1], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=self._shape)
+        assert float(m.trace()) == pytest.approx(0.0)
+
+    def test_trace_int64_on_diagonal(self):
+        # m[1,1] = 5.0 is on the main diagonal → trace = 5.0.
+        data = cupy.array([5.0])
+        indices = cupy.array([1], dtype=cupy.int64)
+        indptr = cupy.array([0, 0, 1], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=self._shape)
+        assert float(m.trace()) == pytest.approx(5.0)
+
+    def test_trace_coo_int64(self):
+        data = cupy.array([3.0, 7.0])
+        row = cupy.array([0, 1], dtype=cupy.int64)
+        col = cupy.array([0, 1], dtype=cupy.int64)
+        m = sparse.coo_matrix(
+            (data, (row, col)), shape=self._shape)
+        assert float(m.trace()) == pytest.approx(10.0)
+
+    def test_trace_offset_int64(self):
+        # m[0, 1] = 9.0 is on the k=1 superdiagonal.
+        data = cupy.array([9.0])
+        indices = cupy.array([1], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 1], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=self._shape)
+        assert float(m.trace(offset=1)) == pytest.approx(9.0)
+        assert float(m.trace(offset=0)) == pytest.approx(0.0)
+
+    def test_trace_empty_int64(self):
+        m = sparse.csr_matrix((2, _LARGE + 1))
+        assert float(m.trace()) == pytest.approx(0.0)
+
+
+class TestInt64Subtraction:
+    """Sparse subtraction (A - B) with int64 indices.
+
+    Uses the same _cupy_csrgeam_int64 fallback as addition (beta=-1).
+    """
+
+    _shape = (2, _LARGE + 2)
+
+    def _make_int64_csr(self, col, value=1.0):
+        data = cupy.array([value])
+        indices = cupy.array([col], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 1], dtype=cupy.int64)
+        return sparse.csr_matrix(
+            (data, indices, indptr), shape=self._shape)
+
+    def test_sub_int64_disjoint(self):
+        a = self._make_int64_csr(0, value=5.0)
+        b = self._make_int64_csr(_LARGE, value=3.0)
+        c = a - b
+        assert c.indices.dtype == cupy.int64
+        assert c.nnz == 2
+        c.sort_indices()
+        assert float(c.data[0]) == pytest.approx(5.0)
+        assert float(c.data[1]) == pytest.approx(-3.0)
+
+    def test_sub_int64_overlapping(self):
+        a = self._make_int64_csr(_LARGE, value=10.0)
+        b = self._make_int64_csr(_LARGE, value=3.0)
+        c = a - b
+        assert c.nnz == 1
+        assert int(c.indices[0]) == _LARGE
+        assert float(c.data[0]) == pytest.approx(7.0)
+
+    def test_sub_int64_self_is_zero(self):
+        # A - A should produce all-zero entries; eliminate_zeros
+        # removes them.
+        a = self._make_int64_csr(_LARGE, value=5.0)
+        c = a - a
+        c.eliminate_zeros()
+        assert c.nnz == 0
+
+
+class TestInt64Transpose:
+    """Transpose (.T) preserves int64 index dtype.
+
+    CSR.T → CSC via _cupy_csr2csc_int64 (lexsort).
+    CSC.T → CSR via _cupy_csc2csr_int64 (lexsort).
+    COO.T swaps row and col arrays.
+    """
+
+    _shape = (2, _LARGE + 2)
+
+    def test_csr_T_preserves_int64(self):
+        data = cupy.array([5.0])
+        indices = cupy.array([_LARGE], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 1], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=self._shape)
+        mt = m.T
+        assert mt.indices.dtype == cupy.int64
+        assert mt.indptr.dtype == cupy.int64
+        assert mt.shape == (self._shape[1], self._shape[0])
+        assert mt.nnz == 1
+
+    def test_csc_T_preserves_int64(self):
+        data = cupy.array([2.0])
+        indices = cupy.array([_LARGE], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 1], dtype=cupy.int64)
+        m = sparse.csc_matrix(
+            (data, indices, indptr), shape=(_LARGE + 2, 2))
+        mt = m.T
+        assert mt.indices.dtype == cupy.int64
+        assert mt.indptr.dtype == cupy.int64
+        assert mt.shape == (2, _LARGE + 2)
+
+    def test_coo_T_preserves_int64(self):
+        data = cupy.array([3.0])
+        row = cupy.array([0], dtype=cupy.int64)
+        col = cupy.array([_LARGE], dtype=cupy.int64)
+        m = sparse.coo_matrix(
+            (data, (row, col)), shape=(1, _LARGE + 1))
+        mt = m.T
+        assert mt.row.dtype == cupy.int64
+        assert mt.col.dtype == cupy.int64
+        assert mt.shape == (_LARGE + 1, 1)
+        assert int(mt.row[0]) == _LARGE
+        assert int(mt.col[0]) == 0
+
+    def test_csr_T_round_trip(self):
+        data = cupy.array([1.0, 2.0])
+        indices = cupy.array([0, _LARGE], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=self._shape)
+        rt = m.T.T
+        # Can't use toarray() (OOM for _LARGE columns); compare
+        # sparse structure directly.
+        assert rt.nnz == m.nnz
+        rt.sort_indices()
+        m.sort_indices()
+        testing.assert_array_equal(rt.indices, m.indices)
+        testing.assert_array_equal(rt.indptr, m.indptr)
+        testing.assert_array_almost_equal(rt.data, m.data)
+
+
+class TestInt64UnaryAndScalarOps:
+    """Unary ops and scalar arithmetic preserve int64 index dtype.
+
+    These all go through _with_data(), which uses the shape-only
+    constructor bypass.  Tests use large index values to confirm the
+    bypass works correctly when indices exceed INT32_MAX.
+    """
+
+    _shape = (2, _LARGE + 2)
+
+    def _make_int64_csr(self, value=5.0):
+        data = cupy.array([value])
+        indices = cupy.array([_LARGE], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 1], dtype=cupy.int64)
+        return sparse.csr_matrix(
+            (data, indices, indptr), shape=self._shape)
+
+    def test_truediv_scalar_preserves_int64(self):
+        m = self._make_int64_csr(6.0)
+        r = m / 2.0
+        assert r.indices.dtype == cupy.int64
+        assert int(r.indices[0]) == _LARGE
+        assert float(r.data[0]) == pytest.approx(3.0)
+
+    def test_power_preserves_int64(self):
+        m = self._make_int64_csr(3.0)
+        r = m.power(2)
+        assert r.indices.dtype == cupy.int64
+        assert int(r.indices[0]) == _LARGE
+        assert float(r.data[0]) == pytest.approx(9.0)
+
+    def test_conj_preserves_int64(self):
+        data = cupy.array([1.0+2.0j])
+        indices = cupy.array([_LARGE], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 1], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=self._shape)
+        c = m.conj()
+        assert c.indices.dtype == cupy.int64
+        assert int(c.indices[0]) == _LARGE
+        assert complex(c.data[0]).imag == pytest.approx(-2.0)
+
+    def test_abs_large_col_preserves_int64(self):
+        m = self._make_int64_csr(-7.0)
+        a = abs(m)
+        assert a.indices.dtype == cupy.int64
+        assert int(a.indices[0]) == _LARGE
+        assert float(a.data[0]) == pytest.approx(7.0)
+
+    def test_neg_large_col_preserves_int64(self):
+        m = self._make_int64_csr(3.0)
+        n = -m
+        assert n.indices.dtype == cupy.int64
+        assert int(n.indices[0]) == _LARGE
+        assert float(n.data[0]) == pytest.approx(-3.0)
+
+
+class TestInt64LinalgGuards:
+    """spsolve and csrilu02 reject int64 indices with ValueError.
+
+    cuSPARSE csrlsvqr and csrilu02 are int32-only at the CUDA level.
+    The guards raise ValueError with a message suggesting int32 cast.
+    """
+
+    def _make_int64_identity(self, n=2):
+        """Small n x n identity with int64 indices."""
+        m = sparse.csr_matrix((n, n), dtype=cupy.float64)
+        m.data = cupy.ones(n, dtype=cupy.float64)
+        m.indices = cupy.arange(n, dtype=cupy.int64)
+        m.indptr = cupy.arange(n + 1, dtype=cupy.int64)
+        m._shape = (n, n)
+        return m
+
+    def test_spsolve_int64_raises(self):
+        from cupyx.scipy.sparse import linalg
+        A = self._make_int64_identity()
+        b = cupy.array([1.0, 2.0])
+        with pytest.raises(ValueError, match='int64'):
+            linalg.spsolve(A, b)
+
+    def test_csrilu02_int64_raises(self):
+        A = self._make_int64_identity()
+        with pytest.raises(ValueError, match='int64'):
+            cusparse.csrilu02(A)
+
+    def test_csrsm2_int64_raises(self):
+        A = self._make_int64_identity()
+        b = cupy.eye(2, dtype=cupy.float64)
+        # csrsm2 may be unavailable (removed in CUDA 12.x) or may
+        # reject int64 with ValueError.  Either error is acceptable.
+        with pytest.raises((ValueError, RuntimeError)):
+            cusparse.csrsm2(A, b)
+
+
+class TestInt64EmptyEdgeCases:
+    """Edge cases with nnz=0 and int64 indices."""
+
+    def test_empty_csr_int64_tocoo(self):
+        # Small row count, large col count to avoid indptr OOM.
+        m = sparse.csr_matrix((2, _LARGE + 1))
+        assert m.indices.dtype == cupy.int64
+        coo = m.tocoo()
+        assert coo.row.dtype == cupy.int64
+        assert coo.nnz == 0
+
+    def test_empty_coo_int64_tocsr(self):
+        m = sparse.coo_matrix((2, _LARGE + 1))
+        assert m.row.dtype == cupy.int64
+        csr = m.tocsr()
+        assert csr.indices.dtype == cupy.int64
+        assert csr.nnz == 0
+
+    def test_add_empty_int64(self):
+        a = sparse.csr_matrix((2, _LARGE + 1))
+        b = sparse.csr_matrix((2, _LARGE + 1))
+        c = a + b
+        assert c.indices.dtype == cupy.int64
+        assert c.nnz == 0
+
+    def test_sort_indices_already_sorted_int64(self):
+        data = cupy.array([1.0, 2.0])
+        indices = cupy.array(
+            [_LARGE, _LARGE + 1], dtype=cupy.int64)
+        indptr = cupy.array([0, 2], dtype=cupy.int64)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=(1, _LARGE + 2))
+        m.sort_indices()
+        assert m.has_sorted_indices
+        assert int(m.indices[0]) == _LARGE
+        assert int(m.indices[1]) == _LARGE + 1
+
+    def test_with_indices_dtype_preserves_sorted(self):
+        # _with_indices_dtype must propagate has_sorted_indices.
+        data = cupy.array([1.0, 2.0])
+        indices = cupy.array([0, 1], dtype=cupy.int32)
+        indptr = cupy.array([0, 1, 2], dtype=cupy.int32)
+        m = sparse.csr_matrix(
+            (data, indices, indptr), shape=(2, 3))
+        m.has_sorted_indices = True
+        promoted = cusparse._with_indices_dtype(m, cupy.int64)
+        assert promoted.indices.dtype == cupy.int64
+        assert promoted.indptr.dtype == cupy.int64
+        assert promoted.has_sorted_indices
