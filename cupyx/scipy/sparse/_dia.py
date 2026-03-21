@@ -10,6 +10,7 @@ import cupy
 from cupy import _core
 from cupyx.scipy.sparse import _csc
 from cupyx.scipy.sparse import _data
+from cupyx.scipy.sparse import _sputils
 from cupyx.scipy.sparse import _util
 
 
@@ -55,7 +56,8 @@ class dia_matrix(_data._data_matrix):
 
         data = cupy.array(data, dtype=dtype, copy=copy)
         data = cupy.atleast_2d(data)
-        offsets = cupy.array(offsets, dtype='i', copy=copy)
+        off_dtype = _sputils.get_index_dtype(maxval=max(shape))
+        offsets = cupy.array(offsets, dtype=off_dtype)
         offsets = cupy.atleast_1d(offsets)
 
         if offsets.ndim != 1:
@@ -156,23 +158,28 @@ class dia_matrix(_data._data_matrix):
 
         num_rows, num_cols = self.shape
         num_offsets, offset_len = self.data.shape
+        idx_dtype = _sputils.get_index_dtype(maxval=max(self.shape))
 
+        it = idx_dtype
         row, mask = _core.ElementwiseKernel(
-            'int32 offset_len, int32 offsets, int32 num_rows, '
-            'int32 num_cols, T data',
-            'int32 row, bool mask',
+            'I offset_len, I offsets, I num_rows, '
+            'I num_cols, T data',
+            'I row, bool mask',
             '''
-            int offset_inds = i % offset_len;
+            I offset_inds = (I)(i % offset_len);
             row = offset_inds - offsets;
-            mask = (row >= 0 && row < num_rows && offset_inds < num_cols
+            mask = (row >= 0 && row < num_rows
+                    && offset_inds < num_cols
                     && data != T(0));
             ''',
-            'cupyx_scipy_sparse_dia_tocsc')(offset_len, self.offsets[:, None],
-                                            num_rows, num_cols, self.data)
-        indptr = cupy.zeros(num_cols + 1, dtype='i')
+            'cupyx_scipy_sparse_dia_tocsc')(
+                it(offset_len),
+                self.offsets[:, None].astype(idx_dtype, copy=False),
+                it(num_rows), it(num_cols), self.data)
+        indptr = cupy.zeros(num_cols + 1, dtype=idx_dtype)
         indptr[1: offset_len + 1] = cupy.cumsum(mask.sum(axis=0))
         indptr[offset_len + 1:] = indptr[offset_len]
-        indices = row.T[mask.T].astype('i', copy=False)
+        indices = row.T[mask.T].astype(idx_dtype, copy=False)
         data = self.data.T[mask.T]
         return _csc.csc_matrix(
             (data, indices, indptr), shape=self.shape, dtype=self.dtype)
