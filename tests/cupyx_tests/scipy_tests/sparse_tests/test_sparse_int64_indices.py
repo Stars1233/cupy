@@ -2323,3 +2323,20 @@ class TestInt64Binopt:
             (2, 3))
         c = a != b
         assert c.nnz == 1
+
+
+class TestInt64Dense2csrGuard:
+    """dense2csr fallback rejects large bool matrices.
+
+    The fallback kernels use int32 arithmetic, so matrices with
+    m*n > INT32_MAX would silently overflow.  The guard raises
+    ValueError with a suggestion to convert to float first.
+    """
+
+    @testing.slow
+    def test_large_bool_dense_to_csr_raises(self):
+        n = numpy.iinfo(numpy.int32).max // 2 + 1
+        a = cupy.zeros((2, n), dtype=bool)
+        a[0, 0] = True
+        with pytest.raises(ValueError, match='dense2csr'):
+            sparse.csr_matrix(a)

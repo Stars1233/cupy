@@ -1205,6 +1205,12 @@ def dense2csr(a):
         else:
             return cusparse.dense2csr(a)
     m, n = a.shape
+    # TODO(cuSPARSE): template kernels for int64 to remove guard
+    if m * n > numpy.iinfo(numpy.int32).max:
+        raise ValueError(
+            'dense2csr fallback does not support matrices with '
+            'more than INT32_MAX elements for non-float dtypes. '
+            'Convert to float first: csr_matrix(a.astype(float))')
     a = cupy.ascontiguousarray(a)
     indptr = cupy.zeros(m + 1, dtype=numpy.int32)
     info = cupy.zeros(m * n + 1, dtype=numpy.int32)
