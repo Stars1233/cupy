@@ -267,7 +267,8 @@ class csr_matrix(_compressed._compressed_sparse_matrix):
         self.sum_duplicates()
         y = cupy.empty(ylen, dtype=self.dtype)
         idx_dtype = self.indptr.dtype
-        _cupy_csr_diagonal()(k, idx_dtype.type(rows), idx_dtype.type(cols),
+        _cupy_csr_diagonal()(idx_dtype.type(k),
+                             idx_dtype.type(rows), idx_dtype.type(cols),
                              self.data, self.indptr, self.indices, y)
         return y
 
@@ -367,9 +368,11 @@ class csr_matrix(_compressed._compressed_sparse_matrix):
         else:
             x_len = min(x_len, values.size)
             x_data = values[:x_len]
-        x_indices = cupy.arange(col_st, col_st + x_len, dtype='i')
-        x_indptr = cupy.zeros((rows + 1,), dtype='i')
-        x_indptr[row_st:row_st+x_len+1] = cupy.arange(x_len+1, dtype='i')
+        idx_dtype = self.indices.dtype
+        x_indices = cupy.arange(col_st, col_st + x_len, dtype=idx_dtype)
+        x_indptr = cupy.zeros((rows + 1,), dtype=idx_dtype)
+        x_indptr[row_st:row_st+x_len+1] = cupy.arange(
+            x_len+1, dtype=idx_dtype)
         x_indptr[row_st+x_len+1:] = x_len
         x_data -= self.diagonal(k=k)[:x_len]
         y = self + csr_matrix((x_data, x_indices, x_indptr), shape=self.shape)
@@ -1242,7 +1245,7 @@ def cupy_dense2csr_step2():
 @cupy._util.memoize(for_each_device=True)
 def _cupy_csr_diagonal():
     return cupy.ElementwiseKernel(
-        'int32 k, I rows, I cols, '
+        'I k, I rows, I cols, '
         'raw T data, raw I indptr, raw I indices',
         'T y',
         '''

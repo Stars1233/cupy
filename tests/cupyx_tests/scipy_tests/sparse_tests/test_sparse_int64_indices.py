@@ -2252,3 +2252,24 @@ class TestInt64SetitemInsert:
         assert m.nnz == 2
         assert m.indices.dtype == cupy.int64
         assert float(m[0, 1]) == pytest.approx(42.0)
+
+
+class TestInt64Setdiag:
+    """setdiag on int64 sparse matrices with large diagonal offsets.
+
+    setdiag creates a temporary CSR with indices for the diagonal,
+    which must use the same index dtype as self.
+    """
+
+    _shape = (2, _LARGE + 2)
+
+    def test_setdiag_large_positive_offset(self):
+        # k=_LARGE: set m[0, _LARGE].
+        m = sparse.csr_matrix._from_parts(
+            cupy.array([1.0]),
+            cupy.array([0], dtype=cupy.int64),
+            cupy.array([0, 1, 1], dtype=cupy.int64),
+            self._shape)
+        m.setdiag(cupy.array([99.0]), k=_LARGE)
+        assert float(m[0, _LARGE]) == pytest.approx(99.0)
+        assert float(m[0, 0]) == pytest.approx(1.0)
