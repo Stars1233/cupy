@@ -1136,6 +1136,8 @@ def coosort(x, sort_by='r'):
     nnz = x.nnz
     if nnz == 0:
         return
+    if sort_by == 'r' and x.has_canonical_format:
+        return
     m, n = x.shape
 
     if x.row.dtype == _cupy.int64:

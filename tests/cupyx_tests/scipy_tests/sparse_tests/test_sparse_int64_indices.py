@@ -2370,3 +2370,26 @@ class TestInt64DiaConversion:
         assert csc.indices.dtype == cupy.int64
         assert csc.indptr.dtype == cupy.int64
         assert csc.nnz == 2
+
+
+class TestInt64CoosortCanonicalSkip:
+    """coosort skips lexsort for canonical int64 COO (row-sorted).
+
+    tocsr() calls coosort(x, 'r') after sum_duplicates().  If the
+    COO is already canonical, coosort can skip the O(nnz log nnz)
+    lexsort entirely.
+    """
+
+    def test_canonical_coo_tocsr_preserves_data(self):
+        # Canonical COO → tocsr should produce correct CSR.
+        data = cupy.array([1.0, 2.0, 3.0])
+        row = cupy.array([0, 1, 1], dtype=cupy.int64)
+        col = cupy.array([_LARGE, 0, _LARGE], dtype=cupy.int64)
+        m = sparse.coo_matrix._from_parts(
+            data, row, col, (2, _LARGE + 1))
+        m.has_canonical_format = True
+        csr = m.tocsr()
+        assert csr.nnz == 3
+        assert float(csr[0, _LARGE]) == pytest.approx(1.0)
+        assert float(csr[1, 0]) == pytest.approx(2.0)
+        assert float(csr[1, _LARGE]) == pytest.approx(3.0)
