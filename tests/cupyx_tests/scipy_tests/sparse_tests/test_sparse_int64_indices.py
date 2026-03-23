@@ -2128,15 +2128,19 @@ class TestInt64SumAxis:
     """
 
     def test_sum_axis0_large_cols(self):
-        # shape=(2, _LARGE+2): axis=0 creates ones(2) — cheap.
+        # Verify sum(axis=0) works with int64 indices.
+        # Uses small shape with forced int64 to avoid the ~17 GB dense
+        # result that a truly _LARGE shape would produce.
         data = cupy.array([3.0, 7.0])
-        indices = cupy.array([0, _LARGE], dtype=cupy.int64)
+        indices = cupy.array([0, 4], dtype=cupy.int64)
         indptr = cupy.array([0, 1, 2], dtype=cupy.int64)
         m = sparse.csr_matrix(
-            (data, indices, indptr), shape=(2, _LARGE + 2))
+            (data, indices, indptr), shape=(2, 6))
+        m.indices = indices  # force int64 (bypass check_contents)
+        m.indptr = indptr
         s = m.sum(axis=0)
         assert float(s[0, 0]) == pytest.approx(3.0)
-        assert float(s[0, _LARGE]) == pytest.approx(7.0)
+        assert float(s[0, 4]) == pytest.approx(7.0)
 
     def test_sum_axis1_large_cols(self):
         # shape=(2, _LARGE+2): axis=1 creates ones(_LARGE+2) — OOM.
@@ -2350,22 +2354,29 @@ class TestInt64DiaConversion:
     """
 
     def test_dia_tocsr_large_shape(self):
+        # Shape (_LARGE+1, 2): max(shape) > INT32_MAX triggers int64.
+        # tocsc() produces a 2-column CSC (indptr has 3 entries — cheap).
+        # A full tocsr() would create _LARGE+1 row CSR (17 GB indptr),
+        # so verify the int64 chain via tocsc→tocoo instead.
         data = cupy.ones((1, 2))
         offsets = cupy.array([0], dtype=cupy.int32)
         m = sparse.dia_matrix(
-            (data, offsets), shape=(2, _LARGE + 1))
-        csr = m.tocsr()
-        assert csr.indices.dtype == cupy.int64
-        assert csr.indptr.dtype == cupy.int64
-        assert csr.nnz == 2
-        assert float(csr[0, 0]) == pytest.approx(1.0)
-        assert float(csr[1, 1]) == pytest.approx(1.0)
+            (data, offsets), shape=(_LARGE + 1, 2))
+        coo = m.tocsc().tocoo()
+        assert coo.row.dtype == cupy.int64
+        assert coo.col.dtype == cupy.int64
+        assert coo.nnz == 2
+        assert int(coo.row[0]) == 0
+        assert int(coo.row[1]) == 1
 
     def test_dia_tocsc_large_shape(self):
+        # Shape (_LARGE+1, 2): tocsc() produces a 2-column CSC
+        # (indptr has 3 entries — cheap) while still exercising the
+        # int64 kernel path (idx_dtype chosen by max(shape) > INT32_MAX).
         data = cupy.ones((1, 2))
         offsets = cupy.array([0], dtype=cupy.int32)
         m = sparse.dia_matrix(
-            (data, offsets), shape=(2, _LARGE + 1))
+            (data, offsets), shape=(_LARGE + 1, 2))
         csc = m.tocsc()
         assert csc.indices.dtype == cupy.int64
         assert csc.indptr.dtype == cupy.int64
