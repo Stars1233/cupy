@@ -74,7 +74,7 @@ cdef extern from *:
 cdef extern from *:
     """
     #ifndef CUSPARSE_SPGEAM_ALG_DEFAULT
-    /* SpGEAM not yet in this cuSPARSE release; provide opaque forward decls. */
+    /* SpGEAM not in this cuSPARSE; provide opaque forward decls. */
     typedef void* cusparseSpGEAMDescr_t;
     typedef int cusparseSpGEAMAlg_t;
     #define CUSPARSE_SPGEAM_ALG_DEFAULT 0

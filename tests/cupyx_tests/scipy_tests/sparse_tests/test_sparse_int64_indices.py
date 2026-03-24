@@ -1145,8 +1145,8 @@ class TestInt64DtypePreservation:
         assert result.indices.dtype == cupy.int64
         assert result.indptr.dtype == cupy.int64
         expected = cupy.array([[1.0, 0.0, 0.0],
-                                [0.0, 2.0, 0.0],
-                                [0.0, 0.0, 3.0]])
+                               [0.0, 2.0, 0.0],
+                               [0.0, 0.0, 3.0]])
         testing.assert_array_almost_equal(result.toarray(), expected)
 
     def test_csr_neg_preserves_int64_small_values(self):
@@ -1161,8 +1161,8 @@ class TestInt64DtypePreservation:
         assert result.indices.dtype == cupy.int64
         assert result.indptr.dtype == cupy.int64
         expected = cupy.array([[-1.0, 0.0, 0.0],
-                                [0.0, -2.0, 0.0],
-                                [0.0, 0.0, -3.0]])
+                               [0.0, -2.0, 0.0],
+                               [0.0, 0.0, -3.0]])
         testing.assert_array_almost_equal(result.toarray(), expected)
 
     def test_csr_scalar_multiply_preserves_int64_small_values(self):
@@ -1177,8 +1177,8 @@ class TestInt64DtypePreservation:
         assert result.indices.dtype == cupy.int64
         assert result.indptr.dtype == cupy.int64
         expected = cupy.array([[2.0, 0.0, 0.0],
-                                [0.0, 4.0, 0.0],
-                                [0.0, 0.0, 6.0]])
+                               [0.0, 4.0, 0.0],
+                               [0.0, 0.0, 6.0]])
         testing.assert_array_almost_equal(result.toarray(), expected)
 
     def test_csr_astype_preserves_int64_small_values(self):
@@ -1256,9 +1256,9 @@ class TestInt64DtypePreservation:
         assert result.indices.dtype == cupy.int64
         assert result.indptr.dtype == cupy.int64
         expected = cupy.array([[1.0, 0.0],
-                                [0.0, 2.0],
-                                [1.0, 0.0],
-                                [0.0, 2.0]])
+                               [0.0, 2.0],
+                               [1.0, 0.0],
+                               [0.0, 2.0]])
         testing.assert_array_almost_equal(result.toarray(), expected)
 
     def test_hstack_flat_index_product_heuristic(self):

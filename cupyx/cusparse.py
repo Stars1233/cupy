@@ -1394,8 +1394,6 @@ def csc2coo(x, data, indices):
     return A
 
 
-
-
 def csc2csr(x):
     if not check_availability('csc2csr'):
         raise RuntimeError('csr2csc is not available.')

@@ -1406,7 +1406,8 @@ cdef f_type cusparseDenseToSparse_convert = <f_type>_lib.get('DenseToSparse_conv
 # TODO(cuSPARSE): SpGEAM not yet in any public release.
 # Loaded via SoftLink; returns NULL on builds without SpGEAM.
 cdef f_type cusparseSpGEAM_createDescr = <f_type>_lib.get('SpGEAM_createDescr')
-cdef f_type cusparseSpGEAM_destroyDescr = <f_type>_lib.get('SpGEAM_destroyDescr')
+cdef f_type cusparseSpGEAM_destroyDescr = (
+    <f_type>_lib.get('SpGEAM_destroyDescr'))
 cdef f_type cusparseSpGEAM_bufferSize = <f_type>_lib.get('SpGEAM_bufferSize')
 cdef f_type cusparseSpGEAM_nnz = <f_type>_lib.get('SpGEAM_nnz')
 cdef f_type cusparseSpGEAM_fn = <f_type>_lib.get('SpGEAM')
