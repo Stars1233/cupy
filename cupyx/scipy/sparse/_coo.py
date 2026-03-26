@@ -379,10 +379,8 @@ class coo_matrix(sparse_data._data_matrix):
         else:
             raise ValueError("'order' must be 'C' or 'F'")
 
-        new_data = self.data
-
-        return coo_matrix((new_data, (new_row, new_col)), shape=shape,
-                          copy=False)
+        return coo_matrix._from_parts(
+            self.data, new_row, new_col, shape=shape)
 
     def sum_duplicates(self):
         """Eliminate duplicate matrix entries by adding them together.

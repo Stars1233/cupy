@@ -989,7 +989,8 @@ def binopt_csr(a, b, op_name):
         a_info, a_valid, a_tmp_indices, a_tmp_data, it(a_nnz),
         b_info, b_valid, b_tmp_indices, b_tmp_data, it(b_nnz),
         c_indices, c_data, size=_size)
-    return csr_matrix((c_data, c_indices, c_indptr), shape=(m, n))
+    return csr_matrix._from_parts(
+        c_data, c_indices, c_indptr, shape=(m, n))
 
 
 @cupy._util.memoize(for_each_device=True)

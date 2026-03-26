@@ -2382,8 +2382,8 @@ def _cupy_spgemm_int64(a, b, alpha):
         c_vals = c_vals * a.dtype.type(alpha)
 
     # Merge products with the same (row, col) position.
-    coo = cupyx.scipy.sparse.coo_matrix(
-        (c_vals, (c_rows, c_cols)), shape=(m, n))
+    coo = cupyx.scipy.sparse.coo_matrix._from_parts(
+        c_vals, c_rows, c_cols, shape=(m, n))
     coo.sum_duplicates()
     return coo.tocsr()
 

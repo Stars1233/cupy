@@ -1308,6 +1308,88 @@ class TestInt64DtypePreservation:
         result = m.max(axis=0)
         assert result.dtype == cupy.float32
 
+    def test_csr_getrow_preserves_int64_small_values(self):
+        # _major_slice used the public constructor, which downcast.
+        data = cupy.array([1.0, 2.0, 3.0])
+        indices = cupy.array([0, 1, 2], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2, 3], dtype=cupy.int64)
+        m = sparse.csr_matrix._from_parts(
+            data, indices, indptr, shape=(3, 3),
+            has_canonical_format=True)
+        r = m.getrow(1)
+        assert r.indices.dtype == cupy.int64
+        assert float(r[0, 1]) == 2.0
+
+    def test_csr_getcol_preserves_int64_small_values(self):
+        # _minor_slice used the public constructor, which downcast.
+        data = cupy.array([1.0, 2.0, 3.0])
+        indices = cupy.array([0, 1, 2], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2, 3], dtype=cupy.int64)
+        m = sparse.csr_matrix._from_parts(
+            data, indices, indptr, shape=(3, 3),
+            has_canonical_format=True)
+        r = m.getcol(0)
+        assert r.indices.dtype == cupy.int64
+
+    def test_csr_slice_preserves_int64_small_values(self):
+        data = cupy.array([1.0, 2.0, 3.0])
+        indices = cupy.array([0, 1, 2], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2, 3], dtype=cupy.int64)
+        m = sparse.csr_matrix._from_parts(
+            data, indices, indptr, shape=(3, 3),
+            has_canonical_format=True)
+        r = m[0:2, :]
+        assert r.indices.dtype == cupy.int64
+        r2 = m[:, 0:2]
+        assert r2.indices.dtype == cupy.int64
+
+    def test_csr_fancy_row_preserves_int64_small_values(self):
+        # _major_index_fancy used the public constructor.
+        data = cupy.array([1.0, 2.0, 3.0])
+        indices = cupy.array([0, 1, 2], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2, 3], dtype=cupy.int64)
+        m = sparse.csr_matrix._from_parts(
+            data, indices, indptr, shape=(3, 3),
+            has_canonical_format=True)
+        r = m[[0, 2], :]
+        assert r.indices.dtype == cupy.int64
+
+    def test_csr_comparison_preserves_int64_small_values(self):
+        # binopt_csr used the public constructor for the result.
+        data = cupy.array([1.0, 2.0, 3.0])
+        indices = cupy.array([0, 1, 2], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2, 3], dtype=cupy.int64)
+        m = sparse.csr_matrix._from_parts(
+            data, indices, indptr, shape=(3, 3),
+            has_canonical_format=True,
+            has_sorted_indices=True)
+        r = m != 0
+        assert r.indices.dtype == cupy.int64
+
+    def test_csr_matmul_preserves_int64_small_values(self):
+        # _cupy_spgemm_int64 used the public COO constructor.
+        data = cupy.array([1.0, 2.0, 3.0])
+        indices = cupy.array([0, 1, 2], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2, 3], dtype=cupy.int64)
+        m = sparse.csr_matrix._from_parts(
+            data, indices, indptr, shape=(3, 3),
+            has_canonical_format=True,
+            has_sorted_indices=True)
+        r = m @ m
+        assert r.indices.dtype == cupy.int64
+
+    def test_coo_reshape_preserves_int64_small_values(self):
+        # COO reshape used the public constructor.
+        data = cupy.array([1.0, 2.0, 3.0])
+        row = cupy.array([0, 1, 2], dtype=cupy.int64)
+        col = cupy.array([0, 1, 2], dtype=cupy.int64)
+        m = sparse.coo_matrix._from_parts(
+            data, row, col, shape=(3, 3),
+            has_canonical_format=True)
+        r = m.reshape((1, 9))
+        assert r.row.dtype == cupy.int64
+        assert r.col.dtype == cupy.int64
+
     def test_vstack_preserves_explicitly_set_int64(self):
         # _compressed_sparse_stack bypass: vstack must not downcast int64
         # indices set explicitly on input matrices.
