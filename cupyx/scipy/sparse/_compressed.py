@@ -684,6 +684,14 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
         if self.nnz == 0 or n_idx == 0:
             return self._empty_like(new_shape)
 
+        # For very large minor axis (N > INT32_MAX), the O(N)
+        # col_counts allocation would be prohibitive and the int32
+        # col_counts/col_order arrays can't represent the positions.
+        # Fall back to the sort-based O(nnz) path.
+        if N > numpy.iinfo(numpy.int32).max:
+            return self._minor_index_fancy_sorted(
+                idx, M, n_idx, new_shape)
+
         idx_dtype = self.indices.dtype
         idx_tname = self._idx_type_name(idx_dtype)
 
@@ -753,12 +761,61 @@ class _compressed_sparse_matrix(sparse_data._data_matrix,
                Bx),
               )
 
-        out = self.__class__(
-            (Bx, Bj, Bp),
-            dtype=self.dtype,
-            shape=new_shape,
-        )
-        return out
+        return self.__class__._from_parts(
+            Bx, Bj, Bp, new_shape)
+
+    def _minor_index_fancy_sorted(self, idx, M, n_idx, new_shape):
+        """Sort-based fancy minor-axis indexing for large minor axis.
+
+        O(nnz + n_idx) space instead of O(N). Used when N > INT32_MAX
+        where the histogram-based path would require a prohibitive
+        O(N) allocation.
+        """
+        idx_dtype = self.indices.dtype
+        idx = cupy.asarray(idx, dtype=idx_dtype)
+
+        sort_order = cupy.argsort(idx)
+        sorted_idx = idx[sort_order]
+
+        lo = cupy.searchsorted(sorted_idx, self.indices, side='left')
+        hi = cupy.searchsorted(sorted_idx, self.indices, side='right')
+        cnt = (hi - lo).astype(cupy.int64)
+
+        total_nnz = int(cnt.sum())
+        if total_nnz == 0:
+            return self._empty_like(new_shape)
+
+        cum_cnt = cupy.zeros(self.nnz + 1, dtype=cupy.int64)
+        cupy.cumsum(cnt, out=cum_cnt[1:])
+
+        out_pos = cupy.arange(total_nnz, dtype=cupy.int64)
+        out_src = cupy.searchsorted(
+            cum_cnt[1:], out_pos, side='right').astype(cupy.int64)
+        offset = out_pos - cum_cnt[out_src]
+
+        out_minor = sort_order[lo[out_src] + offset]
+        out_data = self.data[out_src]
+
+        from cupyx import cusparse as _cusparse_mod
+        major_of_each = _cusparse_mod._indptr_to_coo(
+            self.indptr, self.nnz)
+        out_major = major_of_each[out_src]
+
+        sort_key = cupy.lexsort(cupy.stack([out_minor, out_major]))
+        out_major = out_major[sort_key]
+        out_minor = out_minor[sort_key]
+        out_data = out_data[sort_key]
+
+        out_idx_dtype = _sputils.get_index_dtype(
+            arrays=(self.indices,), maxval=max(M, n_idx))
+        out_indptr = _cusparse_mod._build_indptr(
+            out_major, M, out_idx_dtype)
+
+        return self.__class__._from_parts(
+            out_data, out_minor.astype(out_idx_dtype),
+            out_indptr, new_shape,
+            has_canonical_format=True,
+            has_sorted_indices=True)
 
     def _major_slice(self, idx, copy=False):
         """Index along the major axis where idx is a slice object.

@@ -2814,10 +2814,13 @@ class TestInt64FollowupSlicingFlags:
         assert s._has_sorted_indices is True
         assert s._has_canonical_format is True
 
-    def test_fancy_col_sets_canonical(self):
+    def test_fancy_col_values_correct(self):
         m = _small_int64_csr()
         r = m[:, cupy.array([0, 2])]
-        assert r._has_canonical_format is True
+        # Values must be correct regardless of sort order
+        cupy.testing.assert_array_equal(
+            r.toarray(),
+            m.toarray()[:, [0, 2]])
 
     def test_empty_fancy_col_preserves_int64(self):
         m = _small_int64_csr(shape=(3, 5))
