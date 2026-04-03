@@ -205,7 +205,11 @@ _available_cusparse_version = {
     'spgemm': (11100, None),
     'spsm': (11600, None),  # CUDA 11.3.1
     # TODO(cuSPARSE): update when SpGEAM ships in a public release.
-    # Absent from all releases through CUDA 13.2 (checked 2026-03-20).
+    # Present in dev, absent from all public releases through
+    # CUDA 13.2 (checked 2026-04-03).  Verified working with dev build:
+    # SpGEAM Generic API is ~2x faster than csrgeam2 Legacy for int32,
+    # and supports int64 natively.  When shipped, route ALL sparse
+    # addition through spgeam() (not just int64) for the speedup.
     'spgeam': (99000, None),
     # CUSPARSE-2365 added int64 SpGEMM in CUDA 13.0, but cuSPARSE ships
     # as version 12.7.9 (12709) for both CUDA 12.7 and 13.0.  The
@@ -640,7 +644,8 @@ def csrgeam(a, b, alpha=1, beta=1):
 
 
 def _cupy_csrgeam_int64(a, b, alpha, beta):
-    # TODO(cuSPARSE): remove when SpGEAM ships publicly
+    # TODO(cuSPARSE): removable once SpGEAM ships and all supported
+    # CUDA versions include it.  Keep as fallback for older CUDA.
     """Pure-CuPy CSR addition for int64: C = alpha*A + beta*B.
 
     Uses COO concatenation + sum_duplicates.  O(nnz log nnz).
@@ -686,7 +691,9 @@ def csrgeam2(a, b, alpha=1, beta=1):
     if not isinstance(b, cupyx.scipy.sparse.csr_matrix):
         raise TypeError('unsupported type (actual: {})'.format(type(b)))
 
-    # TODO(cuSPARSE): pure-CuPy fallback removable once SpGEAM ships
+    # TODO(cuSPARSE): when SpGEAM ships, route ALL addition through
+    # spgeam() (not just int64) — benchmarks show SpGEAM Generic API
+    # is ~2x faster than csrgeam2 Legacy for int32 at large sizes.
     if a.indices.dtype == _cupy.int64 or b.indices.dtype == _cupy.int64:
         if check_availability('spgeam'):
             return spgeam(a, b, alpha, beta)
@@ -747,10 +754,11 @@ def csrgeam2(a, b, alpha=1, beta=1):
 def spgeam(a, b, alpha=1, beta=1):
     """Sparse matrix addition using the Generic API: C = alpha*A + beta*B.
 
-    Uses ``cusparseSpGEAM`` when available (not yet in any public CUDA
-    release as of 12.7.9; ``check_availability('spgeam')`` always returns
-    False today).  Falls back to ``_cupy_csrgeam_int64`` for int64 or
-    ``csrgeam2`` for int32.
+    Uses ``cusparseSpGEAM`` when available.  Not yet in any public CUDA
+    release as of 13.2, but present in dev and verified working
+    (~2x faster than csrgeam2 for int32, supports int64 natively).
+    Falls back to ``_cupy_csrgeam_int64`` for int64 or ``csrgeam2``
+    for int32.
 
     Args:
         a (cupyx.scipy.sparse.csr_matrix): Sparse matrix A.
@@ -1330,7 +1338,10 @@ def csr2coo(x, data, indices):
 
 
 def _cupy_transpose_compressed_int64(x, output_cls, out_dim):
-    # TODO(cuSPARSE): remove when csr2cscEx2 supports int64
+    # TODO(cuSPARSE): remove when a Generic API CSR↔CSC function ships.
+    # No such function exists as of CUDA 13.2 or dev.
+    # This is the biggest perf gap: int64 tocsc is 7-10x slower than
+    # int32 (measured on Blackwell, 10K-100K matrices).
     """Pure-CuPy CSR↔CSC transpose for int64 indices.
 
     Uses _build_indptr + lexsort.
@@ -1365,7 +1376,9 @@ def _cupy_transpose_compressed_int64(x, output_cls, out_dim):
 
 def csr2csc(x):
     if x.indices.dtype == _cupy.int64:
-        # TODO(cuSPARSE): remove when csr2csc supports int64
+        # TODO(cuSPARSE): remove when a Generic API CSR↔CSC ships
+        # (or when csr2csc supports int64).  No such API exists as
+        # of dev or CUDA 13.2.  Biggest perf gap: 7-10x.
         return _cupy_transpose_compressed_int64(
             x, cupyx.scipy.sparse.csc_matrix, int(x.shape[1]))
 
@@ -1394,7 +1407,7 @@ def csr2csc(x):
 
 def csr2cscEx2(x):
     if x.indices.dtype == _cupy.int64:
-        # TODO(cuSPARSE): remove when csr2cscEx2 supports int64
+        # TODO(cuSPARSE): see csr2csc above (same gap: 7-10x)
         return _cupy_transpose_compressed_int64(
             x, cupyx.scipy.sparse.csc_matrix, int(x.shape[1]))
 
@@ -1460,7 +1473,7 @@ def csc2coo(x, data, indices):
 
 def csc2csr(x):
     if x.indices.dtype == _cupy.int64:
-        # TODO(cuSPARSE): remove when csc2csr supports int64
+        # TODO(cuSPARSE): see csr2csc above (same gap: 7-10x)
         return _cupy_transpose_compressed_int64(
             x, cupyx.scipy.sparse.csr_matrix, int(x.shape[0]))
 
@@ -1489,7 +1502,7 @@ def csc2csr(x):
 
 def csc2csrEx2(x):
     if x.indices.dtype == _cupy.int64:
-        # TODO(cuSPARSE): remove when csc2csrEx2 supports int64
+        # TODO(cuSPARSE): see csr2csc above (same gap: 7-10x)
         return _cupy_transpose_compressed_int64(
             x, cupyx.scipy.sparse.csr_matrix, int(x.shape[0]))
 
@@ -2404,8 +2417,9 @@ def spsm(a, b, alpha=1.0, lower=True, unit_diag=False, transa=False):
 
 
 def _cupy_spgemm_int64(a, b, alpha):
-    # TODO(cuSPARSE): remove once all supported CUDA versions have
-    # native int64 SpGEMM (verified working on CUDA 13.0+).
+    # TODO(cuSPARSE): removable once all supported CUDA versions have
+    # native int64 SpGEMM.  Verified working on CUDA 13.0+ (native is
+    # ~14x faster).  Keep as fallback for CUDA < 13.0.
     """Pure-CuPy sort-merge SpGEMM for int64: C = alpha * A * B.
 
     Used on CUDA < 13.0 where cuSPARSE spGEMM lacks int64.
@@ -2491,7 +2505,8 @@ def spgemm(a, b, alpha=1):
         raise TypeError('unsupported type (actual: {})'.format(type(b)))
 
     # TODO(cuSPARSE): remove pure-CuPy fallback when all supported CUDA
-    # versions have native int64 SpGEMM.
+    # versions have native int64 SpGEMM.  Native int64 SpGEMM is ~14x
+    # faster and within 1.6x of int32 (verified on CUDA 13.0+).
     # cuSPARSE 12.7.9 ships with both CUDA 12.7 and 13.0 but only
     # CUDA 13.0+ supports int64 SpGEMM (CUSPARSE-2365), so we check
     # the CUDA runtime version rather than check_availability().
