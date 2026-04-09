@@ -170,7 +170,7 @@ class _minmax_mixin:
 
         # Do the reduction
         value = mat._minor_reduce(min_or_max, axis, explicit)
-        idx_dtype = _sputils.get_index_dtype(maxval=max(self.shape))
+        idx_dtype = _sputils.get_index_dtype(maxval=M)
         major_index = cupy.arange(M, dtype=idx_dtype)
 
         mask = value != 0

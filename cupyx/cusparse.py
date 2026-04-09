@@ -61,9 +61,7 @@ def _check_int32_indices(a, func_name):
     if a.indices.dtype == _cupy.int64:
         raise ValueError(
             '{} does not support int64 indices '
-            '(cuSPARSE {} is int32-only). '
-            'Cast to int32 if values fit: '
-            'a.indices.astype(cupy.int32)'.format(
+            '(cuSPARSE {} is int32-only)'.format(
                 func_name, func_name))
 
 
@@ -110,19 +108,9 @@ def _cumsum_int64(arr):
 
 
 def _build_indptr(row_indices, n_rows, dtype):
-    # TODO(cupy): simplify when cupy.add.at supports int64
-    """Build compressed indptr from per-nnz major-axis assignments.
-
-    Uses ``add.at(view(uint64))`` for int64 because CUDA lacks
-    ``atomicAdd(long long*, long long)``.
-    """
+    """Build compressed indptr from per-nnz major-axis assignments."""
     indptr = _cupy.zeros(n_rows + 1, dtype=dtype)
-    if dtype == _cupy.int64:
-        _cupy.add.at(
-            indptr[1:].view(_cupy.uint64),
-            row_indices, _cupy.uint64(1))
-    else:
-        _cupy.add.at(indptr[1:], row_indices, 1)
+    _cupy.add.at(indptr[1:], row_indices, 1)
     _cumsum_int64(indptr)
     return indptr
 

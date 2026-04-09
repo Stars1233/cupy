@@ -742,16 +742,6 @@ __device__ inline I get_row_id(I i, I min, I max, const I *indptr) {
     }
     return row;
 }
-// TODO(cupy): remove when cupy.add.at supports int64 natively.
-// CUDA has no atomicAdd(long long*, long long).
-template<typename I>
-__device__ inline void _atomic_add_one(I* addr) {
-    atomicAdd(addr, (I)1);
-}
-template<>
-__device__ inline void _atomic_add_one<long long>(long long* addr) {
-    atomicAdd((unsigned long long int*)addr, (unsigned long long int)1);
-}
 '''
 
 _FIND_INDEX_HOLDING_COL_IN_ROW_ = '''
@@ -908,7 +898,7 @@ def cupy_multiply_by_csr_step1():
         I i_b = find_index_holding_col_in_row(m_b, n_b,
             &(B_INDPTR[0]), &(B_INDICES[0]));
         if (i_b >= (I)0) {
-            _atomic_add_one(&(NNZ_EACH_ROW[m_c+1]));
+            atomicAdd(&NNZ_EACH_ROW[m_c+1], (I)1);
             FLAGS[i+1] = 1;
             C_DATA = (C)(A_DATA[i_a] * B_DATA[i_b]);
             C_INDICES = n_c;
@@ -1194,9 +1184,9 @@ def cupy_binopt_csr_step1(op_name, preamble=''):
                 MY_VALID[my_j] = 1;
                 MY_TMP_DATA[my_j] = out;
                 MY_TMP_INDICES[my_j] = my_col;
-                _atomic_add_one( &(C_INFO[my_row + 1]) );
-                _atomic_add_one( &(MY_INFO[my_j + 1]) );
-                _atomic_add_one( &(OP_INFO[op_j]) );
+                atomicAdd(&C_INFO[my_row + 1], (I)1);
+                atomicAdd(&MY_INFO[my_j + 1], (I)1);
+                atomicAdd(&OP_INFO[op_j], (I)1);
             }
         }
         ''',
@@ -1292,19 +1282,6 @@ def dense2csr(a):
         data, indices, indptr, (m, n))
 
 
-_DENSE2CSR_ATOMICADD_PREAMBLE = '''
-template <typename I>
-__device__ inline void _d2c_atomic_add(I* addr) {
-    atomicAdd(addr, (I)1);
-}
-template <>
-__device__ inline void _d2c_atomic_add<long long>(long long* addr) {
-    atomicAdd((unsigned long long int*)addr,
-              (unsigned long long int)1);
-}
-'''
-
-
 @cupy._util.memoize(for_each_device=True)
 def cupy_dense2csr_step1():
     return cupy.ElementwiseKernel(
@@ -1314,12 +1291,11 @@ def cupy_dense2csr_step1():
         I row = (I)i / N;
         I col = (I)i % N;
         if (A != static_cast<T>(0)) {
-            _d2c_atomic_add( &(INDPTR[row + 1]) );
+            atomicAdd(&INDPTR[row + 1], (I)1);
             INFO[(I)i + 1] = 1;
         }
         ''',
-        'cupyx_scipy_sparse_dense2csr_step1',
-        preamble=_DENSE2CSR_ATOMICADD_PREAMBLE)
+        'cupyx_scipy_sparse_dense2csr_step1')
 
 
 @cupy._util.memoize(for_each_device=True)

@@ -319,12 +319,11 @@ def bmat(blocks, format=None, dtype=None):
     data = cupy.empty(nnz, dtype=dtype)
     # Propagate int64 from input blocks: if any input block had int64
     # indices (checked before COO conversion), the output should too.
-    # Also check the flat-index product as a maxval heuristic.
-    _maxval = int(shape[0]) * int(shape[1]) - 1
     if _has_int64:
         idx_dtype = numpy.int64
     else:
-        idx_dtype = _sputils.get_index_dtype(maxval=_maxval)
+        idx_dtype = _sputils.get_index_dtype(
+            maxval=max(int(shape[0]), int(shape[1])) - 1)
     row = cupy.empty(nnz, dtype=idx_dtype)
     col = cupy.empty(nnz, dtype=idx_dtype)
 
@@ -391,60 +390,15 @@ def random(m, n, density=0.01, format='coo', dtype=None,
 
     mn = m * n
 
-    # For moderate m*n that fits comfortably in GPU memory, the
-    # original choice-based algorithm is faster (single kernel).
-    # For large m*n, use rejection sampling (O(k) memory).
     tp = numpy.int64 if mn > numpy.iinfo(numpy.int32).max \
         else numpy.int32
-
-    # choice() is a fast single-kernel path but allocates an mn-element
-    # permutation array.  When that array exceeds 256 MB AND density is
-    # low enough that rejection sampling converges quickly (< ~10%),
-    # skip the wasteful allocation.  256 MB is at most 1.6% of a 16 GB
-    # GPU and negligible on larger cards, so below this cap we always
-    # prefer the faster choice() path.  The OOM fallback below still
-    # catches cases where even 256 MB is too much.
-    _choice_bytes = mn * (8 if tp == numpy.int64 else 4)
-    _use_rejection = _choice_bytes > (1 << 28) and k < mn // 10
-    if _use_rejection:
-        ind = _rejection_sample_indices(mn, k, random_state, tp)
-    else:
-        try:
-            ind = random_state.choice(mn, size=k, replace=False)
-            ind = ind.astype(tp, copy=False)
-        except cupy.cuda.memory.OutOfMemoryError:
-            cupy.get_default_memory_pool().free_all_blocks()
-            ind = _rejection_sample_indices(mn, k, random_state, tp)
+    ind = random_state.choice(mn, size=k, replace=False)
+    ind = ind.astype(tp, copy=False)
     j = ind // m
     i = ind - j * m
     vals = data_rvs(k).astype(dtype)
     return _coo.coo_matrix(
         (vals, (i, j)), shape=(m, n)).asformat(format)
-
-
-def _rejection_sample_indices(mn, k, random_state, tp):
-    """Sample k unique flat indices from [0, mn) using O(k) memory.
-
-    Fallback for when mn is too large for ``choice(mn, k)``.
-    Uses rejection sampling: generate random candidates, deduplicate
-    via sort+unique, repeat for any shortfall.  Converges in 1-2
-    iterations for typical sparse densities (collision rate k**2 / 2mn).
-    """
-    flat = cupy.empty(0, dtype=tp)
-    remaining = k
-
-    while remaining > 0:
-        sample_size = remaining + max(remaining // 20, 1)
-        flat_new = (random_state.rand(sample_size) * mn).astype(tp)
-        flat = cupy.unique(cupy.concatenate([flat, flat_new]))
-
-        if len(flat) >= k:
-            flat = flat[:k]
-            remaining = 0
-        else:
-            remaining = k - len(flat)
-
-    return flat
 
 
 def rand(m, n, density=0.01, format='coo', dtype=None, random_state=None):

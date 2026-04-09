@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import warnings
+
 import numpy
 import pytest
 
@@ -1480,28 +1482,15 @@ class TestInt64DtypePreservation:
                                [0.0, 2.0]])
         testing.assert_array_almost_equal(result.toarray(), expected)
 
-    def test_hstack_flat_index_product_heuristic(self):
-        # bmat flat-index heuristic: a matrix with shape (33000, 66000) has
-        # nrows*ncols = 2,178,000,000 > INT32_MAX, so bmat must use int64.
-        # Note: scipy uses maxval=max(shape) and would return int32 here.
-        # This test defines CuPy-specific aspirational behaviour.
-        #
-        # Use CSR inputs with format='csr': hstack of CSC+format=None uses the
-        # _compressed_sparse_stack fast path (which doesn't apply the product
-        # heuristic).  CSR inputs force the slow bmat path where the heuristic
-        # is applied.  Matrices must be non-empty: COO.tocsr() with nnz==0 has
-        # a pre-existing early-return that also ignores the index dtype (out of
-        # scope for current commit).
+    def test_hstack_index_dtype_matches_max_dim(self):
+        # bmat uses max(shape) for index dtype, matching scipy.
+        # Shape (33000, 66000): max dim = 66000, fits int32.
         nrows = 33000
         ncols = 66000
         half = ncols // 2
-        assert nrows * ncols > numpy.iinfo(numpy.int32).max
-        # Each block has one non-zero entry so tocsr() does not hit the nnz==0
-        # early-return path.
         a = sparse.csr_matrix(
             (cupy.array([1.0]), cupy.array([0]), cupy.array([0, 1])),
             shape=(1, half))
-        # Pad to full nrows using vstack (fast path preserves dtype)
         a = sparse.vstack([a, sparse.csr_matrix((nrows - 1, half))])
         b = sparse.csr_matrix(
             (cupy.array([2.0]), cupy.array([0]), cupy.array([0, 1])),
@@ -1509,8 +1498,7 @@ class TestInt64DtypePreservation:
         b = sparse.vstack([b, sparse.csr_matrix((nrows - 1, half))])
         result = sparse.hstack([a, b], format='csr')
         assert result.shape == (nrows, ncols)
-        assert result.indices.dtype == cupy.int64
-        assert result.indptr.dtype == cupy.int64
+        assert result.indices.dtype == cupy.int32
 
     def test_coo2csr_preserves_int64(self):
         # cusparse.coo2csr must preserve int64 row/col dtype even when
@@ -2880,3 +2868,421 @@ class TestInt64FollowupAssertToValueError:
         m._has_canonical_format = True
         with pytest.raises(ValueError, match='2-D'):
             cusparse.spmm(m, cupy.ones(2, dtype=cupy.float64))
+
+
+# ===================================================================
+# Int64 coverage: atomic ops, fallback paths, operations
+# ===================================================================
+
+def _make_int64_csr(m, n, density=0.2, dtype=numpy.float64):
+    a = sparse.random(m, n, density=density, format='csr', dtype=dtype)
+    return sparse.csr_matrix._from_parts(
+        a.data, a.indices.astype(cupy.int64),
+        a.indptr.astype(cupy.int64), a.shape)
+
+
+def _make_int64_csc(m, n, density=0.2, dtype=numpy.float64):
+    a = sparse.random(m, n, density=density, format='csc', dtype=dtype)
+    return sparse.csc_matrix._from_parts(
+        a.data, a.indices.astype(cupy.int64),
+        a.indptr.astype(cupy.int64), a.shape)
+
+
+def _make_int64_coo(m, n, density=0.2, dtype=numpy.float64):
+    a = sparse.random(m, n, density=density, format='coo', dtype=dtype)
+    return sparse.coo_matrix._from_parts(
+        a.data, a.row.astype(cupy.int64),
+        a.col.astype(cupy.int64), a.shape)
+
+
+class TestInt64AtomicOps:
+    """Regression: add.at/maximum.at/minimum.at int64 type guards."""
+
+    def test_scatter_ops_int64(self):
+        idx = cupy.array([0, 1, 2, 0], dtype=cupy.int32)
+
+        # add.at (atomics.cuh provides long long overload)
+        x = cupy.zeros(5, dtype=cupy.int64)
+        cupy.add.at(x, idx, cupy.int64(1))
+        assert int(x[0]) == 2 and int(x[1]) == 1
+
+        # add.at with large values beyond int32 range
+        x2 = cupy.zeros(3, dtype=cupy.int64)
+        big = numpy.int64(2**40)
+        cupy.add.at(x2, cupy.array([0, 0], dtype=cupy.int32),
+                    cupy.int64(big))
+        assert int(x2[0]) == 2 * big
+
+        # maximum.at (CUDA native atomicMax(long long*) since sm_35)
+        y = cupy.zeros(5, dtype=cupy.int64)
+        cupy.maximum.at(y, idx[:3], cupy.int64(5))
+        cupy.testing.assert_array_equal(y[:3], cupy.full(3, 5, cupy.int64))
+
+        # minimum.at (CUDA native atomicMin(long long*) since sm_35)
+        z = cupy.full(5, 100, dtype=cupy.int64)
+        cupy.minimum.at(z, idx[:3], cupy.int64(-1))
+        cupy.testing.assert_array_equal(z[:3], cupy.full(3, -1, cupy.int64))
+
+
+class TestInt64ScalarComparison:
+    """Scalar comparison paths in _csr.py:_comparison."""
+
+    def test_fast_path(self):
+        """op(0, scalar) is False: sparse result via mask filtering."""
+        m = _make_int64_csr(20, 30, density=0.3)
+        ref = m.toarray()
+
+        # mask.all() branch: random values in (0,1), all > 0
+        r = m > 0
+        assert r.indices.dtype == cupy.int64
+        cupy.testing.assert_array_equal(r.toarray(), ref > 0)
+
+        # partial mask branch: only some entries pass
+        threshold = float(cupy.median(m.data))
+        r2 = m > threshold
+        cupy.testing.assert_array_equal(r2.toarray(), ref > threshold)
+
+    def test_slow_path_and_nan(self):
+        """op(0, scalar) is True: dense result. Also NaN edge cases."""
+        m = _make_int64_csr(10, 10, density=0.2)
+        ref = m.toarray()
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', sparse.SparseEfficiencyWarning)
+            # < 1.0: op(0, 1.0) is True → dense expansion
+            r = m < 1.0
+            assert r.indices.dtype == cupy.int64
+            cupy.testing.assert_array_equal(r.toarray(), ref < 1.0)
+            # != 0: slow path
+            r2 = m != 0
+            cupy.testing.assert_array_equal(r2.toarray(), ref != 0)
+            # NaN: != returns all-True, == returns all-False
+            assert (m != numpy.nan).nnz == 100
+        assert (m == numpy.nan).nnz == 0
+
+
+class TestInt64EliminateZerosInt64Path:
+    """eliminate_zeros int64 fallback path in _csr.py."""
+
+    def test_eliminate_zeros(self):
+        m = _make_int64_csr(50, 50, density=0.3)
+        ref_nnz = m.nnz
+        # Partial zeros
+        m.data[:10] = 0
+        m.eliminate_zeros()
+        assert m.nnz == ref_nnz - 10
+        assert m.indices.dtype == cupy.int64
+        assert (m.data != 0).all()
+        # All zeros
+        m.data[:] = 0
+        m.eliminate_zeros()
+        assert m.nnz == 0
+        assert m.indptr.dtype == cupy.int64
+        # No zeros (no-op)
+        m2 = _make_int64_csr(20, 20, density=0.2)
+        old_nnz = m2.nnz
+        m2.eliminate_zeros()
+        assert m2.nnz == old_nnz
+
+
+class TestInt64CsrgeamFallback:
+    """CSR addition fallback (_cupy_csrgeam_int64)."""
+
+    def test_addition_and_mixed_dtypes(self):
+        a = _make_int64_csr(40, 50, density=0.2)
+        b = _make_int64_csr(40, 50, density=0.2)
+        # int64 + int64
+        cupy.testing.assert_allclose((a + b).toarray(),
+                                     a.toarray() + b.toarray())
+        assert (a + b).indices.dtype == cupy.int64
+        # int64 - int64
+        cupy.testing.assert_allclose((a - b).toarray(),
+                                     a.toarray() - b.toarray())
+        # mixed int32 + int64 → int64
+        a32 = sparse.random(40, 50, density=0.2, format='csr')
+        c = a32 + b
+        assert c.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(c.toarray(),
+                                     a32.toarray() + b.toarray())
+
+
+class TestInt64TransposeCompressed:
+    """Pure-CuPy CSR↔CSC transpose for int64."""
+
+    def test_csr_csc_roundtrip(self):
+        a = _make_int64_csr(40, 60, density=0.2)
+        ref = a.toarray()
+        # CSR → CSC
+        csc = a.tocsc()
+        assert csc.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(csc.toarray(), ref)
+        # CSC → CSR roundtrip
+        csr2 = csc.tocsr()
+        assert csr2.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(csr2.toarray(), ref)
+        # Empty matrix
+        e = sparse.csr_matrix._from_parts(
+            cupy.empty(0, dtype=cupy.float64),
+            cupy.empty(0, dtype=cupy.int64),
+            cupy.zeros(11, dtype=cupy.int64), (10, 20))
+        assert e.tocsc().nnz == 0
+        assert e.tocsc().indices.dtype == cupy.int64
+
+
+class TestInt64SpgemmFallback:
+    """Pure-CuPy sort-merge SpGEMM fallback."""
+
+    def test_fallback_vs_native(self):
+        """Fallback gives same result as native cuSPARSE, with alpha."""
+        a = _make_int64_csr(30, 30, density=0.3)
+        b = _make_int64_csr(30, 30, density=0.3)
+        ref = a.toarray() @ b.toarray()
+        # Basic
+        c = cusparse._cupy_spgemm_int64(a, b, alpha=1)
+        assert c.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(c.toarray(), ref, atol=1e-6)
+        # With alpha scaling
+        c3 = cusparse._cupy_spgemm_int64(a, b, alpha=3.0)
+        cupy.testing.assert_allclose(c3.toarray(), 3.0 * ref, atol=1e-6)
+        # Matches native dispatch
+        native = a @ b
+        cupy.testing.assert_allclose(c.toarray(), native.toarray(),
+                                     atol=1e-10)
+
+    def test_empty_result(self):
+        """No overlapping column/row → zero products."""
+        a = sparse.csr_matrix._from_parts(
+            cupy.array([1.0]), cupy.array([0], dtype=cupy.int64),
+            cupy.array([0, 1, 1], dtype=cupy.int64), (2, 3))
+        b = sparse.csr_matrix._from_parts(
+            cupy.array([1.0]), cupy.array([0], dtype=cupy.int64),
+            cupy.array([0, 0, 0, 1], dtype=cupy.int64), (3, 2))
+        assert cusparse._cupy_spgemm_int64(a, b, alpha=1).nnz == 0
+
+
+class TestInt64SortFunctions:
+    """csrsort, cscsort, coosort with int64 indices."""
+
+    def _shuffle_compressed(self, m):
+        for i in range(m.indptr.size - 1):
+            s, e = int(m.indptr[i]), int(m.indptr[i+1])
+            if e - s > 1:
+                perm = cupy.random.permutation(e - s) + s
+                m.indices[s:e] = m.indices[perm]
+                m.data[s:e] = m.data[perm]
+
+    def test_sort_all_formats(self):
+        # CSR
+        m = _make_int64_csr(30, 40, density=0.3)
+        ref = m.toarray()
+        self._shuffle_compressed(m)
+        cusparse.csrsort(m)
+        cupy.testing.assert_allclose(m.toarray(), ref)
+        # CSC
+        m2 = _make_int64_csc(40, 30, density=0.3)
+        ref2 = m2.toarray()
+        self._shuffle_compressed(m2)
+        cusparse.cscsort(m2)
+        cupy.testing.assert_allclose(m2.toarray(), ref2)
+        # COO
+        m3 = _make_int64_coo(30, 30, density=0.3)
+        ref3 = m3.toarray()
+        perm = cupy.random.permutation(m3.nnz)
+        m3.row[:] = m3.row[perm]
+        m3.col[:] = m3.col[perm]
+        m3.data[:] = m3.data[perm]
+        cusparse.coosort(m3)
+        cupy.testing.assert_allclose(m3.toarray(), ref3)
+
+
+class TestInt64RealImagFormats:
+    """.real/.imag preserve int64 indices across formats and dtypes."""
+
+    def test_real_imag(self):
+        # CSR complex
+        data = cupy.array([1+2j, 3+4j, 5+0j], dtype=cupy.complex128)
+        indices = cupy.array([0, 1, 2], dtype=cupy.int64)
+        indptr = cupy.array([0, 1, 2, 3], dtype=cupy.int64)
+        m = sparse.csr_matrix._from_parts(data, indices, indptr, (3, 3))
+        assert m.real.indices.dtype == cupy.int64
+        assert m.imag.indices.dtype == cupy.int64
+        cupy.testing.assert_array_equal(m.real.data, cupy.array([1, 3, 5]))
+        cupy.testing.assert_array_equal(m.imag.data, cupy.array([2, 4, 0]))
+        # CSR float: .real is identity
+        m2 = _make_int64_csr(10, 10, density=0.3)
+        assert m2.real.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(m2.real.toarray(), m2.toarray())
+        # COO complex
+        coo = sparse.coo_matrix._from_parts(
+            cupy.array([1+2j], dtype=cupy.complex64),
+            cupy.array([0], dtype=cupy.int64),
+            cupy.array([1], dtype=cupy.int64), (2, 2))
+        assert coo.real.row.dtype == cupy.int64
+        assert coo.real.dtype == cupy.float32
+
+
+class TestInt64Conversions:
+    """Format conversions preserve int64."""
+
+    def test_conversions(self):
+        # COO → CSR
+        coo = _make_int64_coo(30, 40, density=0.3)
+        ref = coo.toarray()
+        csr = coo.tocsr()
+        assert csr.indptr.dtype == cupy.int64
+        cupy.testing.assert_allclose(csr.toarray(), ref)
+        # CSR → COO
+        coo2 = csr.tocoo()
+        assert coo2.row.dtype == cupy.int64
+        cupy.testing.assert_allclose(coo2.toarray(), ref)
+        # CSC → COO
+        csc = _make_int64_csc(30, 40, density=0.3)
+        coo3 = csc.tocoo()
+        assert coo3.row.dtype == cupy.int64
+        cupy.testing.assert_allclose(coo3.toarray(), csc.toarray())
+
+
+class TestInt64Bmat:
+    """bmat preserves int64 with sparse, mixed, and dense blocks."""
+
+    def test_bmat(self):
+        a = _make_int64_csr(10, 10, density=0.2)
+        b = _make_int64_csr(10, 15, density=0.2)
+        # Horizontal concat
+        c = sparse.bmat([[a, b]])
+        assert c.row.dtype == cupy.int64
+        cupy.testing.assert_allclose(
+            c.toarray(),
+            cupy.concatenate([a.toarray(), b.toarray()], axis=1))
+        # Mixed int32 + int64 → int64
+        a32 = sparse.random(10, 10, density=0.2, format='csr')
+        assert sparse.bmat([[a32, b]]).row.dtype == cupy.int64
+        # Dense block alongside sparse int64
+        d = cupy.eye(10, dtype=cupy.float64)
+        r = sparse.bmat([[a, d], [d, a]])
+        assert r.shape == (20, 20)
+        ref = cupy.concatenate([
+            cupy.concatenate([a.toarray(), d], axis=1),
+            cupy.concatenate([d, a.toarray()], axis=1),
+        ], axis=0)
+        cupy.testing.assert_allclose(r.toarray(), ref)
+
+
+class TestInt64Helpers:
+    """cusparse.py helpers and int32-only guards."""
+
+    def test_helpers_and_guards(self):
+        # _check_int32_indices raises on int64
+        m = _make_int64_csr(5, 5, density=0.5)
+        with pytest.raises(ValueError, match='int32-only'):
+            cusparse._check_int32_indices(m, 'test_func')
+
+        # _with_indices_dtype: upcast int32→int64
+        m32 = sparse.random(10, 10, density=0.3, format='csr')
+        m64 = cusparse._with_indices_dtype(m32, cupy.int64)
+        assert m64.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(m64.toarray(), m32.toarray())
+
+        # _with_indices_dtype: no-op when already int64
+        assert cusparse._with_indices_dtype(m, cupy.int64) is m
+
+        # spsolve rejects int64
+        eye64 = _make_int64_csr(10, 10, density=0.5)
+        eye64 = eye64 + 5.0 * sparse.eye(10, dtype=cupy.float64,
+                                         format='csr')
+        eye64.indices = eye64.indices.astype(cupy.int64)
+        eye64.indptr = eye64.indptr.astype(cupy.int64)
+        with pytest.raises(ValueError, match='int64'):
+            from cupyx.scipy.sparse.linalg import spsolve
+            spsolve(eye64, cupy.ones(10))
+
+
+class TestInt64Operations:
+    """Int64 index preservation across common sparse operations."""
+
+    def test_setitem(self):
+        m = _make_int64_csr(20, 20, density=0.3)
+        m[0, 0] = 99.0
+        assert m.indices.dtype == cupy.int64
+        assert float(m[0, 0]) == 99.0
+        # New entry (sparsity structure change)
+        m2 = sparse.csr_matrix._from_parts(
+            cupy.array([1.0]), cupy.array([0], dtype=cupy.int64),
+            cupy.array([0, 1, 1, 1], dtype=cupy.int64), (3, 3))
+        m2[1, 1] = 5.0
+        assert m2.indices.dtype == cupy.int64
+        assert float(m2[1, 1]) == 5.0
+
+    def test_setdiag(self):
+        m = _make_int64_csr(20, 20, density=0.2)
+        m.setdiag(cupy.ones(20, dtype=cupy.float64))
+        assert m.indices.dtype == cupy.int64
+        cupy.testing.assert_array_equal(m.diagonal(), cupy.ones(20))
+
+    def test_copy_abs_neg(self):
+        m = _make_int64_csr(10, 10, density=0.3)
+        m.data[:5] = -m.data[:5]
+        for r in (m.copy(), abs(m), -m):
+            assert r.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose((-m).toarray(), -(m.toarray()))
+
+    def test_slicing_and_fancy_indexing(self):
+        m = _make_int64_csr(50, 60, density=0.2)
+        ref = m.toarray()
+        # Major slice
+        r = m[10:30]
+        assert r.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(r.toarray(), ref[10:30])
+        # Minor slice
+        r2 = m[:, 10:30]
+        assert r2.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(r2.toarray(), ref[:, 10:30])
+        # Fancy row indexing
+        idx = [1, 5, 10, 49]
+        r3 = m[idx]
+        assert r3.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(r3.toarray(), ref[idx])
+
+    def test_multiply(self):
+        m = _make_int64_csr(20, 25, density=0.3)
+        ref = m.toarray()
+        # Scalar
+        assert (m * 3.0).indices.dtype == cupy.int64
+        cupy.testing.assert_allclose((m * 3.0).toarray(), ref * 3.0)
+        # Dense element-wise
+        d = cupy.random.random((20, 25))
+        r = m.multiply(d)
+        assert r.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(r.toarray(), cupy.multiply(ref, d))
+
+    def test_min_max_axis(self):
+        m = _make_int64_csr(30, 40, density=0.2)
+        ref = cupy.asarray(m.toarray())
+        cupy.testing.assert_allclose(m.max(axis=1).toarray(),
+                                     ref.max(axis=1, keepdims=True))
+        cupy.testing.assert_allclose(m.min(axis=0).toarray(),
+                                     ref.min(axis=0, keepdims=True))
+
+    def test_transpose(self):
+        m = _make_int64_csr(30, 40, density=0.2)
+        t = m.T
+        assert isinstance(t, sparse.csc_matrix)
+        assert t.indices.dtype == cupy.int64
+        cupy.testing.assert_allclose(t.toarray(), m.toarray().T)
+
+
+class TestInt64Regressions:
+    """Regression tests for specific bugs found during int64 work."""
+
+    def test_coo_transpose_canonical(self):
+        """COO transpose must NOT propagate has_canonical_format
+        (swapping row/col destroys lexicographic order)."""
+        m = _make_int64_coo(10, 10, density=0.3)
+        m.has_canonical_format = True
+        assert not m.T.has_canonical_format
+
+    def test_dia_nnz_empty_data(self):
+        """DIA nnz comes from offsets/shape, not data width."""
+        data = cupy.array([[]], dtype=cupy.float32)
+        offsets = cupy.array([0], dtype=cupy.int32)
+        m = sparse.dia_matrix((data, offsets), shape=(3, 4))
+        assert m.nnz == 3
