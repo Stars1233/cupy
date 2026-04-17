@@ -61,9 +61,7 @@ def label(input, structure=None, output=None):
     else:
         caller_provided_output = False
         if output is None:
-            output = cupy.empty(
-                input.shape, cupy.intp if need_64bits else cupy.int32
-            )
+            output = cupy.empty(input.shape, cupy.intp if need_64bits else cupy.int32)
         else:
             if output not in (cupy.int32, cupy.int64):
                 # Guard against invalid atomicAdd calls
@@ -84,13 +82,11 @@ def label(input, structure=None, output=None):
         else:
             return output, maxlabel
 
-    if not (need_64bits and output.dtype != cupy.int64):
+    if not need_64bits or output.dtype == cupy.int64:
         max_label = _label(input, structure, output)
     else:
         # Allocate temporary 64-bit array, then copy results to output buffer
-        tmp_output = cupy.empty(
-            input.shape, cupy.int64 if need_64bits else cupy.int32
-        )
+        tmp_output = cupy.empty(input.shape, cupy.int64)
         max_label = _label(input, structure, tmp_output, max_label=2**31 - 1)
         _core.elementwise_copy(tmp_output, output)
 
@@ -125,10 +121,7 @@ def _label(x, structure, y, max_label=None):
     count = cupy.zeros(2, dtype=y.dtype)
 
     _kernel_init()(x, y)
-    atomic_t = (
-        "unsigned long long" if y.dtype == cupy.int64 else "unsigned int"
-    )
-    _kernel_connect(atomic_t)(y_shape, dirs, ndirs, x.ndim, y, size=y.size)
+    _kernel_connect()(y_shape, dirs, ndirs, x.ndim, y, size=y.size)
     _kernel_count()(y, count, size=y.size)
     nlabels = int(count[0])
     if max_label and nlabels > max_label:
@@ -145,12 +138,16 @@ def _kernel_init():
         'cupyx_scipy_ndimage_label_init')
 
 
-def _kernel_connect(atomic_t):
+def _kernel_connect():
     return _core.ElementwiseKernel(
         'raw int32 shape, raw int32 dirs, int32 ndirs, int32 ndim',
         'raw Y y',
-        f"typedef {atomic_t} atomic_t;"
         '''
+        using atomic_t = typename cupy::type_traits::conditional<
+            cupy::type_traits::is_same<Y, long long>::value,
+            unsigned long long,
+            Y
+        >::type;
         if (y[i] < 0) continue;
         for (int dr = 0; dr < ndirs; dr++) {
             Y j = i;

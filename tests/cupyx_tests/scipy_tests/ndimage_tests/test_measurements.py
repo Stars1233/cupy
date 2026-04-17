@@ -690,9 +690,12 @@ class TestLabelInt32Overflow:
         cell = (ix - c) ** 2 + (iy - c) ** 2 + (iz - c) ** 2 <= r ** 2
         return cupy.tile(cupy.asarray(cell), tile_counts)
 
+    #   cell grid | image dimensions | voxel count | above int32 limit?
+    # 100x100x100 |    1000x10001000 |        ~1e9 | no
+    # 130x130x130 |    1300x13001300 |    ~2.197e9 | yes
     @pytest.mark.parametrize('tile_counts', [
-        ((100, 100, 100)),  # ~1e9 voxels — below int32 limit
-        ((130, 130, 130)),  # ~2.197e9 voxels — above int32 limit
+        ((100, 100, 100)),
+        ((130, 130, 130)),
     ])
     @pytest.mark.parametrize('output', [None, numpy.int32, numpy.int64])
     def test_label_dtype_output(self, tile_counts, output):
