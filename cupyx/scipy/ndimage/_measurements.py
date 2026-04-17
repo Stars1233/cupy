@@ -61,7 +61,9 @@ def label(input, structure=None, output=None):
     else:
         caller_provided_output = False
         if output is None:
-            output = cupy.empty(input.shape, cupy.intp if need_64bits else cupy.int32)
+            output = cupy.empty(
+                input.shape, cupy.intp if need_64bits else cupy.int32
+            )
         else:
             if output not in (cupy.int32, cupy.int64):
                 # Guard against invalid atomicAdd calls
