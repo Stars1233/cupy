@@ -536,5 +536,5 @@ def matrix_transpose(a):
     ndim = a.ndim
 
     if ndim < 2:
-        return a
+        raise ValueError('Matrix dimension is less than 2')
     return a.swapaxes(ndim-1, ndim-2)
