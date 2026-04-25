@@ -549,10 +549,10 @@ class TestMatrixPowerBatched:
 
 @pytest.mark.parametrize(*testing.product({
     'shapes': [
-    ((3, 4), (4, 5)),
-    ((1, 1), (1, 1)),
-    ((5, 5), (5, 5)),
-    ((1, 7), (7, 1)),
+        ((3, 4), (4, 5)),
+        ((1, 1), (1, 1)),
+        ((5, 5), (5, 5)),
+        ((1, 7), (7, 1)),
     ],
 }))
 class TestLinalgMatmul2D:
