@@ -75,4 +75,5 @@ __all__ = [
     "cross",
     "LinAlgError",
     "matmul",
+    "matrix_transpose",
 ]
