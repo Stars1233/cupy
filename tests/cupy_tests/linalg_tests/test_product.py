@@ -545,3 +545,31 @@ class TestMatrixPowerBatched:
         a = testing.shaped_arange(shape, xp, dtype)
         a += xp.identity(shape[-1], dtype)
         return xp.linalg.matrix_power(a, n)
+
+
+@pytest.mark.parametrize(*testing.product({
+    'shapes': [
+    ((3, 4), (4, 5)),
+    ((1, 1), (1, 1)),
+    ((5, 5), (5, 5)),
+    ((1, 7), (7, 1)),
+    ],
+}))
+class TestLinalgMatmul2D:
+
+    @testing.for_float_dtypes()
+    @testing.numpy_cupy_allclose(atol=1e-5)
+    def test_matmul_2d(self, xp, dtype, shapes):
+        shape_a, shape_b = shapes
+        a = testing.shaped_random(shape_a, xp, dtype)
+        b = testing.shaped_random(shape_b, xp, dtype)
+        return xp.linalg.matmul(a, b)
+
+
+class TestLinalgMatrixTranspose:
+
+    @testing.for_all_dtypes()
+    @testing.numpy_cupy_allclose()
+    def test_matrix_transpose(self, xp, dtype):
+        a = testing.shaped_arange((2, 3), xp, dtype)
+        return xp.linalg.matrix_transpose(a)
