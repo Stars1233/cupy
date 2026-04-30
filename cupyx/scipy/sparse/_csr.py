@@ -52,6 +52,8 @@ class csr_matrix(_compressed._compressed_sparse_matrix):
     """
 
     format = 'csr'
+    # Index of the major axis in shape: rows for CSR.
+    _major_axis = 0
 
     def get(self, stream=None):
         """Returns a copy of the array on host memory.

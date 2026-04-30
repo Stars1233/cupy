@@ -95,6 +95,8 @@ def _with_indices_dtype(m, dtype):
     Data array is shared (no copy).  Used to promote int32 index arrays to
     int64 before calling a cuSPARSE function that requires uniform int64.
     """
+    # The short-circuit relies on the invariant indices.dtype == indptr.dtype
+    # (enforced by _from_parts and the public constructor).
     if m.indptr.dtype == dtype:
         return m
     # Read private attrs to avoid triggering the lazy property getter
@@ -756,6 +758,11 @@ def spgeam(a, b, alpha=1, beta=1):
 
     idx_dtype = _numpy.result_type(a.indices.dtype, b.indices.dtype)
     a, b = _cast_common_type(a, b)
+    # cuSPARSE requires uniform index dtype across operands; promote any
+    # int32 input to match the common idx_dtype before SpMatDescr.create.
+    # _cast_common_type only promotes data dtype, not indices.
+    a = _with_indices_dtype(a, idx_dtype)
+    b = _with_indices_dtype(b, idx_dtype)
     m, n = a.shape
     handle = _device.get_cusparse_handle()
 

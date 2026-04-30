@@ -132,8 +132,11 @@ class dia_matrix(_data._data_matrix):
 
         m, n = self.shape
         it = self.offsets.dtype.type
+        # Use int64 accumulator: per-diagonal counts fit int32, but the
+        # sum across (m + n - 1) diagonals can exceed INT32_MAX even when
+        # the offsets dtype is int32 (e.g., a dense 2**15 x 2**15 matrix).
         nnz = _core.ReductionKernel(
-            'I offsets, I m, I n', 'I nnz',
+            'I offsets, I m, I n', 'int64 nnz',
             'offsets > 0 ? min(m, n - offsets) : min(m + offsets, n)',
             'a + b', 'nnz = a', '0', 'dia_nnz')(
                 self.offsets, it(m), it(n))

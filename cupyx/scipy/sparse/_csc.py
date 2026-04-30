@@ -46,6 +46,8 @@ class csc_matrix(_compressed._compressed_sparse_matrix):
     """
 
     format = 'csc'
+    # Index of the major axis in shape: columns for CSC.
+    _major_axis = 1
 
     def get(self, stream=None):
         """Returns a copy of the array on host memory.
