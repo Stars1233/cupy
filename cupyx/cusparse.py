@@ -69,10 +69,31 @@ def _indptr_to_coo(indptr, dtype=None):
     """Expand compressed ``indptr`` to per-nnz major-axis indices.
 
     Inverse of :func:`_build_indptr`.  ``dtype`` defaults to ``indptr.dtype``.
+
+    For most matrices the ``cupy.repeat(arange(major), diff)`` formula
+    is the right call: O(major + nnz) memory, no host sync.  But when
+    the major axis dwarfs ``nnz`` (e.g. the (2, 2**31+5) CSC produced
+    by transposing a wide CSR with a single stored entry), the
+    ``arange(major)`` allocation dominates -- 17 GB of intermediate
+    state for one nnz.  In that regime fall back to a searchsorted
+    formula that uses O(nnz log major) memory at the cost of one D2H
+    sync to read ``int(indptr[-1])``.
     """
     if dtype is None:
         dtype = indptr.dtype
     nrows = indptr.shape[0] - 1
+    # Below 16K rows the ``arange`` is cheap (<= 128 KB at int64) and
+    # the log factor of searchsorted is a wash, so prefer ``repeat``.
+    # Above the threshold, sync once to read nnz; only switch to
+    # searchsorted if the major axis is much larger than nnz (4x gives
+    # a safety margin against marginal cases).
+    if nrows > (1 << 14):
+        nnz = int(indptr[-1])  # synchronize!
+        if nrows > 4 * max(nnz, 1):
+            arange = _cupy.arange(nnz, dtype=dtype)
+            # ``searchsorted`` returns intp; cast back to ``dtype``.
+            return _cupy.searchsorted(
+                indptr[1:], arange, side='right').astype(dtype, copy=False)
     return _cupy.repeat(
         _cupy.arange(nrows, dtype=dtype), _cupy.diff(indptr))
 
@@ -1307,9 +1328,15 @@ def csr2coo(x, data, indices):
         _cusparse.xcsr2coo(
             handle, x.indptr.data.ptr, nnz, m, row.data.ptr,
             _cusparse.CUSPARSE_INDEX_BASE_ZERO)
+    # Preserve has_canonical_format: a canonical CSR (sorted column
+    # indices within each row, no duplicates) expands to row-major
+    # lexicographic COO order, which is exactly the COO canonical form.
+    # Read the cached flag directly to avoid triggering the lazy GPU
+    # kernel on the source; uncached/False both fall through to False.
     A = cupyx.scipy.sparse.coo_matrix._from_parts(
-        data, row, indices, x.shape)
-    A.has_canonical_format = False
+        data, row, indices, x.shape,
+        has_canonical_format=bool(
+            getattr(x, '_has_canonical_format', False)))
     return A
 
 
@@ -1346,8 +1373,18 @@ def _cupy_transpose_compressed_int64(x, output_cls, out_dim):
     # Sort by (output major, output minor) for canonical order.
     order = _cupy.lexsort(_cupy.stack([expanded, x.indices]))
 
+    # Preserve has_canonical_format: a canonical input (sorted col
+    # indices, no duplicates) transposes to a CSC/CSR whose minor
+    # indices are also sorted-no-dup within each major slot.  When the
+    # input is *not* canonical (or canonical state is unknown), the
+    # output may still be canonical -- the lexsort makes the output
+    # sorted regardless of the input's order, and the output has
+    # duplicates iff the input did.  Conservatively propagate only
+    # known-True; False / None both leave the output's flag unset.
+    canonical = getattr(x, '_has_canonical_format', None)
     return output_cls._from_parts(
         x.data[order], expanded[order], out_indptr, x.shape,
+        has_canonical_format=True if canonical else None,
         has_sorted_indices=True)
 
 
@@ -2204,7 +2241,10 @@ def denseToSparse(x, format='csr'):
     desc_y = SpMatDescriptor.create(y)
     _cusparse.denseToSparse_convert(handle, desc_x.desc,
                                     desc_y.desc, algo, buff.data.ptr)
-    y._has_canonical_format = True
+    # COO uses ``has_canonical_format`` (no leading underscore) as its
+    # plain attribute -- writing ``_has_canonical_format`` would set a
+    # different attribute and the result would not be marked canonical.
+    y.has_canonical_format = True
     return y
 
 

@@ -116,13 +116,16 @@ class csr_matrix(_compressed._compressed_sparse_matrix):
             if not zero_cmp:
                 self.sum_duplicates()
                 new_data = op(self.data, scalar)
-                # Keep only True entries (filter explicit False).
+                # Keep only True entries (filter explicit False).  The
+                # post-``sum_duplicates`` structure is canonical
+                # (sorted, no duplicates); filtering preserves both
+                # invariants, so propagate ``has_canonical_format=True``.
                 mask = new_data
                 if mask.all():  # synchronize!
                     return csr_matrix._from_parts(
                         new_data, self.indices.copy(),
                         self.indptr.copy(), self.shape,
-                        has_sorted_indices=True)
+                        has_canonical_format=True)
                 from cupyx.cusparse import (
                     _indptr_to_coo, _build_indptr)
                 idx_dtype = self.indices.dtype
@@ -134,7 +137,7 @@ class csr_matrix(_compressed._compressed_sparse_matrix):
                 indptr = _build_indptr(rows, M, idx_dtype)
                 return csr_matrix._from_parts(
                     data, cols, indptr, self.shape,
-                    has_sorted_indices=True)
+                    has_canonical_format=True)
             # Slow path: op(0, scalar) is True, so unstored entries
             # contribute.  Fall through to binopt_csr which expands
             # to O(m*n).  This is unavoidable when the result is
@@ -840,34 +843,42 @@ def multiply_by_csr(a, b):
     b_nnz = b.nnz * (m // b_m) * (n // b_n)
     if a_nnz > b_nnz:
         return multiply_by_csr(b, a)
+    # Harmonize index dtypes so the kernel template parameter ``I`` is
+    # consistent across both operands (mirrors ``binopt_csr``).
+    # Without this, mixed int32/int64 inputs trip a type mismatch.
+    idx_dtype = numpy.promote_types(a.indices.dtype, b.indices.dtype)
+    a_indices = a.indices.astype(idx_dtype, copy=False)
+    a_indptr = a.indptr.astype(idx_dtype, copy=False)
+    b_indices = b.indices.astype(idx_dtype, copy=False)
+    b_indptr = b.indptr.astype(idx_dtype, copy=False)
     c_nnz = a_nnz
     dtype = numpy.promote_types(a.dtype, b.dtype)
     c_data = cupy.empty(c_nnz, dtype=dtype)
-    c_indices = cupy.empty(c_nnz, dtype=a.indices.dtype)
+    c_indices = cupy.empty(c_nnz, dtype=idx_dtype)
     if m > a_m:
         if n > a_n:
-            c_indptr = cupy.arange(0, c_nnz+1, n, dtype=a.indptr.dtype)
+            c_indptr = cupy.arange(0, c_nnz+1, n, dtype=idx_dtype)
         else:
-            c_indptr = cupy.arange(0, c_nnz+1, a.nnz, dtype=a.indptr.dtype)
+            c_indptr = cupy.arange(0, c_nnz+1, a.nnz, dtype=idx_dtype)
     else:
-        c_indptr = a.indptr.copy()
+        c_indptr = a_indptr.copy()
         if n > a_n:
             c_indptr *= n
-    flags = cupy.zeros(c_nnz+1, dtype=a.indices.dtype)
-    nnz_each_row = cupy.zeros(m+1, dtype=a.indptr.dtype)
+    flags = cupy.zeros(c_nnz+1, dtype=idx_dtype)
+    nnz_each_row = cupy.zeros(m+1, dtype=idx_dtype)
 
     # compute c = a * b where necessary and get sparsity pattern of matrix d
-    it = a.indptr.dtype.type
+    it = idx_dtype.type
     cupy_multiply_by_csr_step1()(
-        a.data, a.indptr, a.indices, it(a_m), it(a_n),
-        b.data, b.indptr, b.indices, it(b_m), it(b_n),
+        a.data, a_indptr, a_indices, it(a_m), it(a_n),
+        b.data, b_indptr, b_indices, it(b_m), it(b_n),
         c_indptr, it(m), it(n), c_data, c_indices, flags, nnz_each_row)
 
-    flags = cupy.cumsum(flags, dtype=a.indptr.dtype)
-    d_indptr = cupy.cumsum(nnz_each_row, dtype=a.indptr.dtype)
+    flags = cupy.cumsum(flags, dtype=idx_dtype)
+    d_indptr = cupy.cumsum(nnz_each_row, dtype=idx_dtype)
     d_nnz = int(d_indptr[-1])  # synchronize!
     d_data = cupy.empty(d_nnz, dtype=dtype)
-    d_indices = cupy.empty(d_nnz, dtype=a.indices.dtype)
+    d_indices = cupy.empty(d_nnz, dtype=idx_dtype)
 
     # remove zero elements in matrix c
     cupy_multiply_by_csr_step2()(c_data, c_indices, flags, d_data, d_indices)
@@ -988,7 +999,7 @@ def binopt_csr(a, b, op_name):
     a_nnz = a.nnz * (m // a_m) * (n // a_n)
     b_nnz = b.nnz * (m // b_m) * (n // b_n)
 
-    idx_dtype = numpy.result_type(a.indices.dtype, b.indices.dtype)
+    idx_dtype = numpy.promote_types(a.indices.dtype, b.indices.dtype)
     a_indptr = a.indptr.astype(idx_dtype, copy=False)
     a_indices = a.indices.astype(idx_dtype, copy=False)
     b_indptr = b.indptr.astype(idx_dtype, copy=False)

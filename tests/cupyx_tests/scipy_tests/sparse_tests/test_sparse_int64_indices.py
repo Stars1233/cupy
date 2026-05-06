@@ -3528,3 +3528,112 @@ class TestDiaGetnnzAccumulator:
         n = m.getnnz()
         assert type(n) is int
         assert n == 3
+
+
+class TestIndptrToCooSearchsorted:
+    """``_indptr_to_coo`` switches to a searchsorted-based formula
+    when the major axis dwarfs ``nnz``.  The motivating case is a
+    ``(2, 2**31+5)`` CSC produced by transposing a wide-sparse CSR
+    with one stored entry: the ``cupy.repeat(arange(major), ...)``
+    formula would otherwise allocate ``arange(2**31+5)`` -- 17 GB.
+    """
+
+    def test_repeat_path_for_typical_matrices(self):
+        # Below the 16K-row threshold the legacy ``repeat`` path runs
+        # without any extra D2H sync.
+        indptr = cupy.array([0, 2, 3, 5], dtype=cupy.int64)
+        result = cusparse._indptr_to_coo(indptr)
+        cupy.testing.assert_array_equal(
+            result, cupy.array([0, 0, 1, 2, 2], dtype=cupy.int64))
+        assert result.dtype == cupy.int64
+
+    def test_searchsorted_path_for_tall_sparse(self):
+        # nrows > 16K and nrows > 4*nnz: triggers searchsorted.
+        # Output must match the repeat-formula reference exactly.
+        nrows = 2**16
+        indptr = cupy.zeros(nrows + 1, dtype=cupy.int64)
+        # Three nnz at rows 100, 1000, 50000.
+        indptr[101:1001] = 1
+        indptr[1001:50001] = 2
+        indptr[50001:] = 3
+        result = cusparse._indptr_to_coo(indptr)
+        cupy.testing.assert_array_equal(
+            result, cupy.array([100, 1000, 50000], dtype=cupy.int64))
+
+    def test_searchsorted_path_pathological_tall_csc(self):
+        # The motivating case: nnz=1 in a moderately tall matrix.
+        BIG_N = 1 << 18  # 256K rows
+        indptr = cupy.zeros(BIG_N + 1, dtype=cupy.int64)
+        indptr[BIG_N:] = 1  # single nnz at the end
+        result = cusparse._indptr_to_coo(indptr)
+        assert result.size == 1
+        assert int(result[0]) == BIG_N - 1
+
+
+class TestLsqrInt32Guard:
+    """``lsqr`` calls cuSOLVER's ``csrlsvqr`` which is int32-only;
+    without an explicit guard, int64 indices were silently
+    reinterpreted, producing NaN/Inf garbage.  Mirror the guard
+    already present in ``spsolve``.
+    """
+
+    def test_int64_csr_raises(self):
+        from cupy.cuda import runtime
+        if runtime.is_hip:
+            pytest.skip('HIP does not support lsqr')
+        from cupyx.scipy.sparse.linalg import lsqr
+        idx = cupy.array([0, 1, 2, 3], dtype=cupy.int64)
+        ptr = cupy.array([0, 1, 2, 3, 4], dtype=cupy.int64)
+        a = sparse.csr_matrix._from_parts(
+            cupy.array([2.0, 2.0, 2.0, 2.0]), idx, ptr, (4, 4))
+        b = cupy.array([1.0, 2.0, 3.0, 4.0])
+        with pytest.raises(ValueError, match='lsqr'):
+            lsqr(a, b)
+
+    def test_int32_csr_works(self):
+        # Regression: the int32 happy path is unchanged.
+        from cupy.cuda import runtime
+        if runtime.is_hip:
+            pytest.skip('HIP does not support lsqr')
+        from cupyx.scipy.sparse.linalg import lsqr
+        a = sparse.eye(4, format='csr', dtype=cupy.float64) * 2.0
+        b = cupy.array([1.0, 2.0, 3.0, 4.0])
+        x, *_ = lsqr(a, b)
+        cupy.testing.assert_allclose(x, [0.5, 1.0, 1.5, 2.0])
+
+
+class TestMultiplyMixedInt32Int64:
+    """``csr.multiply(csr)`` previously rejected mixed int32/int64
+    operands with a kernel template-type-mismatch error
+    (``Type is mismatched. B_INDPTR int32 int64 I``).  Promote both
+    operands to a common dtype so the kernel template parameter ``I``
+    is consistent.
+    """
+
+    def test_int32_multiply_int64(self):
+        a = sparse.csr_matrix(cupy.array([[1.0, 2.0], [3.0, 4.0]]))
+        idx = cupy.array([0, 1], dtype=cupy.int64)
+        ptr = cupy.array([0, 1, 2], dtype=cupy.int64)
+        b = sparse.csr_matrix._from_parts(
+            cupy.array([2.0, 5.0]), idx, ptr, (2, 2))
+        c = a.multiply(b)
+        assert c.indices.dtype == cupy.int64
+        cupy.testing.assert_array_equal(
+            c.toarray(), cupy.array([[2.0, 0.0], [0.0, 20.0]]))
+
+    def test_int64_multiply_int32(self):
+        idx = cupy.array([0, 1], dtype=cupy.int64)
+        ptr = cupy.array([0, 1, 2], dtype=cupy.int64)
+        a = sparse.csr_matrix._from_parts(
+            cupy.array([2.0, 5.0]), idx, ptr, (2, 2))
+        b = sparse.csr_matrix(cupy.array([[1.0, 2.0], [3.0, 4.0]]))
+        c = a.multiply(b)
+        assert c.indices.dtype == cupy.int64
+        cupy.testing.assert_array_equal(
+            c.toarray(), cupy.array([[2.0, 0.0], [0.0, 20.0]]))
+
+    def test_int32_only_unchanged(self):
+        a = sparse.csr_matrix(cupy.array([[1.0, 2.0], [3.0, 4.0]]))
+        b = sparse.csr_matrix(cupy.array([[1.0, 0.0], [0.0, 1.0]]))
+        c = a.multiply(b)
+        assert c.indices.dtype == cupy.int32
