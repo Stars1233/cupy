@@ -500,6 +500,15 @@ def kron(a, b):
             b_shape = (1,) * (a_ndim - b_ndim) + b_shape
             ndim = a_ndim
 
+    if a.size == 0 or b.size == 0:
+        # The concatenate-based path below iterates each intermediate's
+        # leading axis; once that axis has length 0 (the next iteration when
+        # `a` is empty, or the first one for some shape combinations) it
+        # raises. Bypass it for empty inputs.
+        out_shape = tuple(s_a * s_b for s_a, s_b in zip(a_shape, b_shape))
+        return cupy.empty(
+            out_shape, dtype=numpy.result_type(a.dtype, b.dtype))
+
     axis = ndim - 1
     out = _core.tensordot_core(
         a, b, None, a.size, b.size, 1, a_shape + b_shape)
