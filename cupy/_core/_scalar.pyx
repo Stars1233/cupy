@@ -121,7 +121,7 @@ cpdef str get_typename(dtype, type_decls=None):
         if descr.type_num == cnp.NPY_VOID:
             if cnp.PyDataType_HASFIELDS(descr):
                 # NOTE: Caching this may not be trivial if we use metadata.
-                name, *_ = _build_struct_typename(dtype, type_decls)
+                name, _ = _build_struct_typename(dtype, type_decls)
                 return name
             elif not cnp.PyDataType_HASSUBARRAY(descr) and descr.itemsize > 0:
                 # Unstructured void is just a blob bytes.
@@ -197,7 +197,7 @@ def _build_struct_typename(dtype, type_decls):
         # TODO(seberg): We should be able to query the JIT for the actual
         # alignment constraints (making this a trivial recursion)
         if subdtype.num == cnp.NPY_VOID and subdtype.fields is not None:
-            subname, _, subalignment = _build_struct_typename(
+            subname, subalignment = _build_struct_typename(
                 subdtype, subtype_decls)
         else:
             subalignment = get_cuda_alignment(subdtype)
@@ -237,7 +237,7 @@ def _build_struct_typename(dtype, type_decls):
     name = (
         f"cupy::StructView<cupy::raw_structview_storage<{dtype.itemsize}, "
         f"{alignment}>, {fields}>")
-    return name, None, alignment
+    return name, alignment
 
 
 cdef dict _typenames = {}
