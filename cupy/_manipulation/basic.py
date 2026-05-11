@@ -53,6 +53,7 @@ def copyto(dst, src, casting='same_kind', where=None):
         src = src.squeeze()[()]  # work with the scalar value
         src_is_scalar = True
     elif numpy.isscalar(src):
+        src_dtype = src  # just report as the scalar value itself.
         can_cast = numpy.can_cast(src, dst.dtype, casting)
         src_is_scalar = True
     else:

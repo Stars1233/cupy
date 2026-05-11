@@ -114,7 +114,7 @@ concrete dtype mapping.
     @staticmethod
     cdef _Op from_type_and_routine(typ, routine, object resolution_func)
 
-    cpdef tuple resolve_dtypes(self, list in_dtypes, list out_dtypes)
+    cpdef tuple resolve_dtypes(self, list in_args, list out_args)
 
     # Creates an op instance parsing a dtype mapping with given error function.
     @staticmethod

@@ -1,6 +1,8 @@
 #ifndef UNSTRUCTURED_VOID_H_
 #define UNSTRUCTURED_VOID_H_
 
+#include "cupy/carray.cuh"
+
 
 namespace cupy {
 
@@ -9,28 +11,28 @@ class UnstructuredVoid {
 public:
   char data[Size];
 
-  UnstructuredVoid() = default;
+  __device__ UnstructuredVoid() = default;
 
   template<typename OtherType>
-  explicit UnstructuredVoid(const OtherType& other) {
+  explicit __device__ UnstructuredVoid(const OtherType& other) {
     *this = other;
   }
 
-  bool operator==(const UnstructuredVoid<Size>& other) const {
+  __device__ bool operator==(const UnstructuredVoid<Size>& other) const {
     for (size_t i = 0; i < Size; ++i) {
-        if (data[i] != other.data[i]) return false;
+      if (data[i] != other.data[i]) return false;
     }
     return true;
   }
 
-  bool operator!=(const UnstructuredVoid<Size>& other) const {
+  __device__ bool operator!=(const UnstructuredVoid<Size>& other) const {
     return !(*this == other);
   }
 
   template<typename OtherType>
-  UnstructuredVoid& operator=(const OtherType& other) {
-    // NumPy allows anything to avoid really, just by copying the bytes
-    // (and filling up with zeros).
+  __device__ UnstructuredVoid& operator=(const OtherType& other) {
+    // NumPy allows almost anything by copying bytes and
+    // filling up the remainder with zeros.
     size_t min_length = Size < sizeof(OtherType) ? Size : sizeof(OtherType);
     const char* other_bytes = reinterpret_cast<const char*>(&other);
     memcpy(data, other_bytes, min_length);

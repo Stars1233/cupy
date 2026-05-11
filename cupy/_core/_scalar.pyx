@@ -4,8 +4,6 @@ cimport cpython
 cimport numpy as cnp
 
 import graphlib
-import hashlib
-import textwrap
 
 import numpy
 
@@ -77,12 +75,12 @@ cpdef str format_type_decls(set type_decls):
     if not type_decls:
         return ""
 
-    # Formatting the is unfortunately not as simple as `sorted()` as it can
+    # Formatting this is unfortunately not as simple as `sorted()` as it can
     # be nested, etc.
     cdef dict declarations = {}
     # Recursively flatten the type declarations into a dict
     _flatten_type_decls(type_decls, declarations)
-    # Sort the dictionary by it's keys (to achieve a stable order)
+    # Sort the dictionary by its keys (to achieve a stable order)
     declarations = dict(sorted(declarations.items()))
 
     ts = graphlib.TopologicalSorter(declarations)
@@ -96,7 +94,7 @@ cpdef str get_typename(dtype, type_decls=None):
     If not None, `type_decls` must be a set and the dtype preamble
     (i.e. this should be required headers) will be inserted.
     A preamble is either a string or a tuple of (string, frozenset)
-    where the frozenset is also a set of `type_decls` (the the first
+    where the frozenset is also a set of `type_decls` (that the first
     depends on).
 
     If you just have a header, order should normally not matter so you
@@ -154,7 +152,7 @@ cdef Py_ssize_t get_cuda_alignment(cnp.dtype dtype) except -1:
         # out the right alignment already as part of `get_typename` before we
         # launch the kernel.
         if cnp.PyDataType_HASFIELDS(dtype):
-            # Subarray would be obvious, but we don't suppor them yet.
+            # Subarray would be obvious, but we don't support them yet.
             raise NotImplementedError(
                 f"get_cuda_alignment() only supports unstructured dtypes, "
                 f"got {dtype}")
@@ -166,6 +164,7 @@ cdef Py_ssize_t get_cuda_alignment(cnp.dtype dtype) except -1:
         _alignment_kernel = cupy.ElementwiseKernel(
             "T in", "int64 out",
             "using in_t = decltype(in); out = alignof(in_t);",
+            "_cupy_get_cuda_alignment",
         )
 
     # synchronize!
@@ -184,29 +183,25 @@ def _build_struct_typename(dtype, type_decls):
     if dtype.metadata:
         # If manually overridden, use that alignment:
         alignment = dtype.metadata.get("__cuda_alignment__", alignment)
-    curr_start = 0
-    offsets = []
-    struct_fields = []
     fields = []
-    struct_compatible = True
 
-    # subdtype_decls are dependencies for this type, we iclude the header
+    # subdtype_decls are dependencies for this type, we include the header
     # itself here as well:
     cdef set subtype_decls = set()
     subtype_decls.add('#include "cupy/structview.cuh"')
 
     for name, (subdtype, offset, *_) in dtype.fields.items():
-        # The fields tupe can contain a 4th title, we ignore it.
+        # The fields tuple can contain a 4th title, we ignore it.
         # (A title is an alternative field name...)
 
         # TODO(seberg): We should be able to query the JIT for the actual
         # alignment constraints (making this a trivial recursion)
         if subdtype.num == cnp.NPY_VOID and subdtype.fields is not None:
-            subname, struct_name, subalignment = _build_struct_typename(
+            subname, _, subalignment = _build_struct_typename(
                 subdtype, subtype_decls)
         else:
             subalignment = get_cuda_alignment(subdtype)
-            subname = struct_name = get_typename(subdtype, subtype_decls)
+            subname = get_typename(subdtype, subtype_decls)
             if subdtype.metadata:
                 # If manually overridden, use that alignment:
                 subalignment = subdtype.metadata.get(
@@ -218,31 +213,15 @@ def _build_struct_typename(dtype, type_decls):
         if offset % subalignment != 0:
             # NOTE: We don't error earlier (for field access yet).
             raise ValueError(f"Field {name} with offset {offset} is not "
-                             f"aligned to {alignment} in dtype {dtype}. "
+                             f"aligned to {subalignment} in dtype {dtype}. "
                              f"This is not supported by CuPy please ensure "
                              "the structure is aligned. You can do so with "
                              "the `make_aligned_dtype()` helper.")
 
-        if not (0 <= (offset - curr_start) < subalignment):
-            # Addign `alignas({subalignment})` would not align with the
-            # actual offset. So we cannot describe it by a struct.
-            # (If the offset is larger, we could achieve this via padding)
-            struct_compatible = False
-        else:
-            curr_start = offset
-
-        curr_start += subdtype.itemsize
-
-        offsets.append(offset)
-        # fields are only used if all fields are indeed compatible
-        struct_fields.append(
-            f"  alignas({subalignment}) {struct_name} {name};")
+        # We currently keep the backing storage opaque and rely only on
+        # StructView field descriptors for access. If desired, we could later
+        # expose a generated fielded struct for explicit `.data` access.
         fields.append(f"cupy::Field<{subname}, {offset}>")
-
-    if not struct_compatible:
-        # If the struct doesn't work out, just use a single _data field.
-        struct_fields = [
-            f"  char _data[{dtype.itemsize}];"]
 
     if dtype.itemsize % alignment != 0:
         raise ValueError(
@@ -251,27 +230,14 @@ def _build_struct_typename(dtype, type_decls):
             "supported. You can ensure compatibility with the "
             "`make_aligned_dtype()` helper (or try `align=True`).")
 
-    struct_fields = "\n".join(struct_fields)
-    hash_ = hashlib.sha1(
-        struct_fields.encode("utf8"), usedforsecurity=False).hexdigest()
-    struct_name = "struct_" + hash_
-
-    # NOTE: We add this to the "headers", but the headers are always sorted
-    # before use and actual includes start with `#` and go first. We must not
-    # start with a space or newline, though!
-    # We have to do this here, because it is a template parameter.
-    # TODO(seberg): Maybe type-map should be passed through actually?!
-    definition = textwrap.dedent(f"""
-        struct alignas({alignment}) {struct_name} {{
-        {struct_fields}
-        }};
-    """).lstrip("\n")  # for sorting, don't start with \n
     if type_decls is not None:
-        type_decls.add((definition, frozenset(subtype_decls)))
+        type_decls.update(subtype_decls)
 
     fields = ', '.join(fields)
-    name = f"cupy::StructView<{struct_name}, {dtype.itemsize}, {fields}>"
-    return name, struct_name, alignment
+    name = (
+        f"cupy::StructView<cupy::raw_structview_storage<{dtype.itemsize}, "
+        f"{alignment}>, {fields}>")
+    return name, None, alignment
 
 
 cdef dict _typenames = {}

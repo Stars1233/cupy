@@ -251,17 +251,22 @@ class TestIndexing:
         return (a[sl]["f0"], a[sl]["f1"])
 
 
-class TestKernelStructAccess:
+class TestKernelFieldAccess:
     def test_elementwise_kernel(self):
-        # When the data can be defined as a normal struct, then
-        # we allow access via `.data`.
-        # TODO/NOTE(seberg): Is this even desired?!
+        # Structured values are intentionally not exposed as named structs.
+        # Field access is supported by field index only.
+        # NOTE(seberg): We could expose `.data` as a custom struct or field
+        # access by name (which seems to require very modern C++).
         kernel = cupy.ElementwiseKernel(
-            'T in', 'T out', 'out.data.f1 = -in.data.f0;',
+            'T in', 'T out',
+            '''
+            static_assert(T::field_count == 2, "expected 2 fields");
+            out.at<1>() = -in.at<0>();
+            ''',
             'test_struct_access')
         x = cupy.array([1, 2, 3], dtype="i,i")
         y = cupy.array([4, 5, 6], dtype="i,i")
-        # kernel mutates field 1.
+        # kernel mutates field 1 via field-index access.
         kernel(x, y)
         expected = cupy.array([(4, -1), (5, -2), (6, -3)], dtype="i,i")
         testing.assert_array_equal(y, expected)
