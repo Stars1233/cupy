@@ -163,6 +163,15 @@ class TestMakeAlignedDtype:
     def test_make_aligned_dtype(self, dt, itemsize):
         assert cupy.make_aligned_dtype(dt).itemsize == itemsize
 
+    @pytest.mark.parametrize("dt", ["c16", "V3"])
+    def test_make_aligned_dtype_non_structured_error(self, dt):
+        # Currently, we really only support structured dtypes. This could
+        # be removed in which case the code should correctly do nothing
+        # except possibly attach the `__cuda_alignment__` metadata.
+        with pytest.raises(
+                ValueError, match="only supports structured dtypes"):
+            cupy.make_aligned_dtype(dt)
+
 
 class TestFieldAccess:
     @testing.numpy_cupy_array_equal()

@@ -222,6 +222,7 @@ def _make_aligned_dtype(
         # Allow this when `alignment=` is passed, we try to add the metadata
         dtype_info = descr  # unchanged for now
         final_alignment = _scalar.get_cuda_alignment(descr)
+        curr_offset = descr.itemsize  # asserts itemsize multiple of alignment
     else:
         names = []
         offsets = []
@@ -331,5 +332,10 @@ def make_aligned_dtype(
         NumPy promotion (e.g. in concatenate) may "canonicalize" the dtype
         and drop the struct layout and CuPy alignment metadata.
     """
+    cdef cnp.dtype descr = cnp.dtype(dtype, align=True)
+    if descr.type_num != cnp.NPY_VOID or (<object>descr).fields is None:
+        raise ValueError(
+            "make_aligned_dtype() only supports structured dtypes.")
+
     return _make_aligned_dtype(
         dtype, alignment=alignment, recurse=recurse)[0]
