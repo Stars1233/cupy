@@ -11,7 +11,7 @@ class UnstructuredVoid {
 public:
   char data[Size];
 
-  __device__ UnstructuredVoid() = default;
+  UnstructuredVoid() = default;
 
   template<typename OtherType>
   explicit __device__ UnstructuredVoid(const OtherType& other) {
