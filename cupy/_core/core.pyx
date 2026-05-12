@@ -993,7 +993,7 @@ cdef class _ndarray_base:
         """
         cupy_arr = _convert_from_cupy_like(value, error=False)
         if cupy_arr is not None:
-            if value.shape != ():
+            if cupy_arr.shape != ():
                 raise ValueError(
                     'non-scalar cupy.ndarray cannot be used for fill')
             value = cupy_arr.astype(self.dtype, copy=False)
