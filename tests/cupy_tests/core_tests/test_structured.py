@@ -152,6 +152,13 @@ class TestComparison:
         with pytest.raises(ValueError, match="Unsupported dtype"):
             op(a, a)
 
+    def test_many_fields(self, op):
+        fields = [(f"f{i}", "i1") for i in range(256)]
+        dtype = numpy.dtype(fields)
+        a = cupy.zeros(3, dtype=dtype)
+        b = cupy.zeros(3, dtype=dtype)
+        testing.assert_array_equal(op(a, b), op(a.get(), b.get()))
+
 
 class TestMakeAlignedDtype:
     # Note also tested partially in promotion for comparison
