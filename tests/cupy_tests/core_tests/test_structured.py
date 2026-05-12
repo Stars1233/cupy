@@ -144,6 +144,14 @@ class TestComparison:
         res = op(a, b)
         assert numpy.array_equal(res.get(), op(a.get(), b.get()))
 
+    def test_subarray_of_struct_error(self, op):
+        # subarrays are usupported right now (but ideally give a nice error)
+        inner = numpy.dtype([("x", "i4"), ("y", "f4")])
+        dtype = numpy.dtype([("a", inner, (3,))])
+        a = cupy.zeros(2, dtype=dtype)
+        with pytest.raises(ValueError, match="Unsupported dtype"):
+            op(a, a)
+
 
 class TestMakeAlignedDtype:
     # Note also tested partially in promotion for comparison

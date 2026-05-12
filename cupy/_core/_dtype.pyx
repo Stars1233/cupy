@@ -229,12 +229,12 @@ def _make_aligned_dtype(
         subdtypes = []
 
         for name, (subdtype, offset, *_) in (<object>descr).fields.items():
-            # The fields tupe can contain a 4th title, we ignore it.
+            # The fields tuple can contain a 4th title, we ignore it.
             # (A title is an alternative field name...)
             if offset < min_offset:
                 raise ValueError(
                     "make_aligned_dtype() only supports well behaved "
-                    "in-order fields as it ignores field offsets).")
+                    "in-order fields as it ignores field offsets.")
 
             # Keep track of field offset to reject non-ordered inputs.
             min_offset = offset + subdtype.itemsize

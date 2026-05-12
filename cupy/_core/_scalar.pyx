@@ -215,8 +215,8 @@ def _build_struct_typename(dtype, type_decls):
             subname, subalignment = _build_struct_typename(
                 subdtype, subtype_decls)
         else:
-            subalignment = get_cuda_alignment(subdtype)
             subname = get_typename(subdtype, subtype_decls)
+            subalignment = get_cuda_alignment(subdtype)
             if subdtype.metadata:
                 # If manually overridden, use that alignment:
                 subalignment = subdtype.metadata.get(
