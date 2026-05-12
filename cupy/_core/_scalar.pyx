@@ -132,7 +132,22 @@ cpdef str get_typename(dtype, type_decls=None):
     raise ValueError(f"Unsupported dtype {dtype}")
 
 
-cdef dict _cuda_alignments = {}
+cdef dict _cuda_alignments = {
+    numpy.dtype('bool'): 1,
+    numpy.dtype('int8'): 1,
+    numpy.dtype('uint8'): 1,
+    numpy.dtype('int16'): 2,
+    numpy.dtype('uint16'): 2,
+    numpy.dtype('int32'): 4,
+    numpy.dtype('uint32'): 4,
+    numpy.dtype('int64'): 8,
+    numpy.dtype('uint64'): 8,
+    numpy.dtype('float16'): 2,
+    numpy.dtype('float32'): 4,
+    numpy.dtype('float64'): 8,
+    numpy.dtype('complex64'): 8,
+    numpy.dtype('complex128'): 16,
+}
 cdef object _alignment_kernel = None
 
 
