@@ -59,6 +59,13 @@ cdef _any = create_reduction_func(
 def struct_compare_resolution(op, in_dtypes, out_dtypes):
     # NumPy ignores field names, so we'll do that as well.
     dt1, dt2 = in_dtypes
+    if dt1.fields is None and dt2.fields is None:
+        if dt1.itemsize == dt2.itemsize and dt1.itemsize > 0:
+            out_dtypes = (numpy.dtype(bool),)
+            return (dt1, dt1), out_dtypes
+        raise TypeError(
+            f"cannot compare unstructured voids of different size "
+            f"({dt1.itemsize} vs {dt2.itemsize})")
     if dt1.fields is None or dt2.fields is None:
         raise TypeError("Cannot compare structured and non-structured dtypes")
 

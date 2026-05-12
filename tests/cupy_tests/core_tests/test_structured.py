@@ -314,6 +314,13 @@ class TestUnstructuredVoid:
         xp.copyto(a, xp.array(from_values), casting="unsafe")
         return a
 
+    @pytest.mark.parametrize("op", [operator.eq, operator.ne])
+    @testing.numpy_cupy_array_equal()
+    def test_comparison_equal_same_size(self, xp, op):
+        a = xp.array([b"87654321", b"12345678"], dtype="V8")
+        b = xp.array([b"87654321", b"1234567_"], dtype="V8")
+        return op(a, b)
+
 
 @pytest.mark.parametrize("scalar", [
     1.0,
