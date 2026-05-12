@@ -3202,7 +3202,9 @@ cdef inline get_cai_dtype(dict desc):
     # extract dtype from descr, this is slightly "smarter" than some
     # NumPy versions (at least 2.4), but much like `np.load` logic.
     # (For CuPy it is much more likely to use aligned and thus padded dtypes.)
-    descr = desc['descr']
+    descr = desc.get('descr')  # allow missing 'descr'
+    if descr is None:
+        return dtype
     if isinstance(descr, list):
         offset = 0
         names = []
