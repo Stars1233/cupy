@@ -991,19 +991,18 @@ cdef class _ndarray_base:
         .. seealso:: :meth:`numpy.ndarray.fill`
 
         """
-        if isinstance(value, cupy.ndarray):
+        cupy_arr = _convert_from_cupy_like(value, error=False)
+        if cupy_arr is not None:
             if value.shape != ():
                 raise ValueError(
                     'non-scalar cupy.ndarray cannot be used for fill')
-            value = value.astype(self.dtype, copy=False)
-            fill_kernel(value, self)
-            return
-
-        if isinstance(value, numpy.ndarray):
+            value = cupy_arr.astype(self.dtype, copy=False)
+        else:
+            value = numpy.asarray(value, dtype=self.dtype)
             if value.shape != ():
                 raise ValueError(
                     'non-scalar numpy.ndarray cannot be used for fill')
-            value = value.astype(self.dtype, copy=False)[()]
+            value = value[()]  # use scalar rather than NumPy array
 
         if ((<cnp.dtype>(self.dtype)).type_num != cnp.NPY_VOID
                 and value == 0 and self._c_contiguous):
