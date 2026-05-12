@@ -249,6 +249,12 @@ class TestFieldAccess:
 
 
 class TestIndexing:
+    def test_assign(self):
+        src = cupy.array([(1, 1.5), (2, 2.5), (3, 3.5)], dtype="i4,f4")
+        dst = cupy.zeros(src.shape, dtype="i4,f4")
+        dst[:] = src
+        testing.assert_array_equal(dst, src)
+
     @testing.numpy_cupy_array_equal()
     @pytest.mark.parametrize("sl", [slice(1, None), slice(None, None, 2)])
     def test_slicing(self, xp, sl):
