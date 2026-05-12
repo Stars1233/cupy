@@ -172,6 +172,11 @@ cdef Py_ssize_t get_cuda_alignment(cnp.dtype dtype) except -1:
                 f"get_cuda_alignment() only supports unstructured dtypes, "
                 f"got {dtype}")
         if cnp.PyDataType_HASSUBARRAY(dtype):
+            if dtype.base.fields is not None:
+                # To support nested subarrays on some branches we should
+                # make sure to recurse into the base correctly.
+                # This just gives a nicer error (to avoid hitting the above).
+                raise ValueError("CuPy does not yet support subarray dtypes.")
             # Alignment is inherited from the field dtype
             return get_cuda_alignment(dtype.base)
 

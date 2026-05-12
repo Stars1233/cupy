@@ -145,11 +145,12 @@ class TestComparison:
         assert numpy.array_equal(res.get(), op(a.get(), b.get()))
 
     def test_subarray_of_struct_error(self, op):
-        # subarrays are usupported right now (but ideally give a nice error)
+        # subarrays are unsupported right now (but ideally give a nice error).
+        # This error is currently given pretty explicitly.
         inner = numpy.dtype([("x", "i4"), ("y", "f4")])
         dtype = numpy.dtype([("a", inner, (3,))])
         a = cupy.zeros(2, dtype=dtype)
-        with pytest.raises(ValueError, match="Unsupported dtype"):
+        with pytest.raises(ValueError, match=".*subarray dtypes"):
             op(a, a)
 
     def test_many_fields(self, op):
