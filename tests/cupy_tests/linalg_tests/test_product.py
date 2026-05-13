@@ -573,11 +573,7 @@ class TestLinalgMatrixTranspose:
         return xp.linalg.matrix_transpose(a)
 
     @testing.for_all_dtypes()
-    @testing.numpy_cupy_array_equal()
+    @testing.numpy_cupy_array_equal(accept_error=ValueError)
     def test_matrix_transpose_error(self, xp, dtype):
         a = testing.shaped_arange((10,), xp, dtype)
-        with pytest.raises(ValueError):
-            # matrix_transpose only accepts ndarrays
-            # more than or equal to 2 dimensions
-            xp.linalg.matrix_transpose(a)
-        return xp.array(0)
+        return xp.linalg.matrix_transpose(a)
