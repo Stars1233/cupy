@@ -71,9 +71,9 @@ public:
   static constexpr size_t alignment = alignof(storage_type);
   static constexpr size_t field_count = sizeof...(Fields);
 
-  __device__ StructView() : data_{} {
-    init();
-  }
+  // initialize by initializing the storage, we could initialize
+  // individual fields, but assume this would also zero them.
+  __device__ StructView() = default;
 
   __device__ StructView(
       const StructView<storage_type, Fields...>& other) : data_{} {
@@ -150,7 +150,7 @@ public:
   }
 
 private:
-  storage_type data_;
+  storage_type data_{};
 
   template<typename O, typename... OF, size_t... Is>
   __device__ bool compare_eq_impl(
@@ -172,14 +172,6 @@ private:
   template<typename O, typename... OF>
   __device__ void assign(const StructView<O, OF...>& other) {
     assign_impl(other, std::make_index_sequence<sizeof...(Fields)>{});
-  }
-
-  template<size_t... Is>
-  __device__ void init_impl(std::index_sequence<Is...>) {
-    ((at<Is>() = typename FieldAt<Is>::type{}), ...);
-  }
-  __device__ void init() {
-    init_impl(std::make_index_sequence<sizeof...(Fields)>{});
   }
 
   template<typename T, size_t... Is>

@@ -8,6 +8,15 @@ from libc.stdint cimport int32_t
 from cupy.cuda.function cimport CPointer
 
 
+cdef extern from 'numpy/ndarraytypes.h':
+    cdef int PyArray_Pack(cnp.dtype dtype, void *ptr, object value) except -1
+
+    cdef enum:
+        NPY_ITEM_REFCOUNT
+        NPY_ITEM_IS_POINTER
+        NPY_NEEDS_INIT
+
+
 @cython.final
 cdef class CScalar(CPointer):
 

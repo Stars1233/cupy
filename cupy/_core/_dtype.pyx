@@ -51,7 +51,8 @@ cdef bint check_supported_dtype(cnp.dtype dtype, bint error) except -1:
         # We don't really need to know anything about the dtype, but cannot
         # do references (copying back to CPU would be wrong).
         # Of course... the user may not be able to _do_ anything with it!
-        if dtype.flags & (0x01 | 0x04):
+        if dtype.flags & (
+                _scalar.NPY_ITEM_REFCOUNT | _scalar.NPY_ITEM_IS_POINTER):
             # Note, NumPy may (currently) flag this if a dtype has "holes"
             # such as `np.ones(10, dtype="i,O,i")[["f0", "f1"]]`.
             raise ValueError(

@@ -11,10 +11,6 @@ import cupy
 from cupy._core cimport _dtype
 
 
-cdef extern from 'numpy/ndarraytypes.h':
-    cdef int PyArray_Pack(cnp.dtype dtype, void *ptr, object value) except -1
-
-
 cdef dict _typenames_base = {
     numpy.dtype('float64'): ('double', None),
     numpy.dtype('float32'): ('float', None),
@@ -366,7 +362,7 @@ cdef class CScalar(CPointer):
 
     cdef _store_c_value(self):
         # No current support for dtypes that may require initialization
-        assert not self.descr.flags & 0x08
+        assert not self.descr.flags & NPY_NEEDS_INIT
         assert self.ptr == 0
 
         if self.descr.itemsize < sizeof(self._data):
@@ -385,7 +381,7 @@ cdef class CScalar(CPointer):
 
     cpdef apply_dtype(self, dtype):
         cdef cnp.dtype descr = cnp.dtype(dtype)
-        if descr.flags & (0x01 | 0x04):
+        if descr.flags & (NPY_ITEM_REFCOUNT | NPY_ITEM_IS_POINTER):
             # Can't support this, so make sure we raise appropriate error.
             _dtype.check_supported_dtype(descr, True)
             raise RuntimeError(f"Unsupported dtype {dtype} (but not raised?)")
