@@ -528,7 +528,7 @@ def matrix_transpose(a):
     args:
         x : (~cupy.ndarray) : (..., M, N)
     Returns:
-        ~cupy.ndarray: (...,N,M)
+        ~cupy.ndarray: (..., N, M)
 
     Reference:
         more details: func : numpy.linalg.matrix_transpose
